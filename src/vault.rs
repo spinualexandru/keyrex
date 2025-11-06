@@ -234,12 +234,17 @@ impl Vault {
     }
 
     /// Gets the path to the lock file
+    /// The lock file is placed in the same directory as the vault file
     fn get_lock_path() -> Result<PathBuf, VaultError> {
-        let mut path = dirs::home_dir().ok_or(VaultError::HomeDirectoryNotFound)?;
-        path.push(".keyrex");
-        fs::create_dir_all(&path)?;
-        path.push("vault.lock");
-        Ok(path)
+        let vault_path = Self::get_user_vault_path()?;
+        let lock_path = vault_path.with_extension("lock");
+
+        // Ensure parent directory exists
+        if let Some(parent) = lock_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        Ok(lock_path)
     }
 
     /// Acquires an exclusive lock on the vault file
