@@ -1,0 +1,40 @@
+[package]
+name = "keyrex-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+keyrex = { path = ".." }
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_encrypt_decrypt"
+path = "fuzz_targets/fuzz_encrypt_decrypt.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_vault_operations"
+path = "fuzz_targets/fuzz_vault_operations.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_password_validation"
+path = "fuzz_targets/fuzz_password_validation.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_json_parsing"
+path = "fuzz_targets/fuzz_json_parsing.rs"
+test = false
+doc = false

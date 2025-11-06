@@ -1,0 +1,19 @@
+# KeyRex Configuration File
+#
+# This file should be placed at:
+#   Linux/Unix: ~/.config/keyrex/config.toml (or $XDG_CONFIG_HOME/keyrex/config.toml)
+#   macOS:      ~/Library/Application Support/keyrex/config.toml
+#   Windows:    %APPDATA%\keyrex\config.toml
+#
+# You can also specify a custom config path with: keyrex --config=/path/to/config.toml
+
+[default]
+# Path to your vault file
+# Supports environment variable expansion: ${HOME}, ${USER}, etc.
+# Also supports tilde expansion: ~/path/to/vault
+path = "${HOME}/.keyrex/vault.dat"
+
+# Examples:
+# path = "~/.keyrex/vaults/work.dat"
+# path = "/mnt/encrypted/keyrex.dat"
+# path = "${HOME}/Documents/secrets/vault.dat"

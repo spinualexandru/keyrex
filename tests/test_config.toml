@@ -1,0 +1,8 @@
+# Test configuration file
+# Used by integration tests to ensure isolated test environments
+# This prevents tests from affecting user's actual vault data
+
+[default]
+# Test vault path in system temp directory
+# Tests will override this with unique paths per test
+path = "/tmp/keyrex_tests/test_vault.dat"
