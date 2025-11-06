@@ -7,6 +7,7 @@ It combines robust encryption, clear operational feedback, and a polished comman
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org)
+[![CI](https://github.com/spinualexandru/keyrex/actions/workflows/ci.yml/badge.svg)](https://github.com/spinualexandru/keyrex/actions/workflows/ci.yml)
 
 ---
 
@@ -254,8 +255,14 @@ For more details, see **CLAUDE.md**.
 * GPG integration for hybrid encryption
 * Cloud sync support (e.g., Dropbox, Google Drive)
 * Sync Manager integration (e.g., Bitwarden, 1Password)
-* CI/CD pipeline (GitHub Actions)
-* Extended platform testing (macOS, Windows)
+
+---
+
+## Future Improvements
+
+* **Cross-Platform Testing** — Full CI test coverage for macOS and Windows (currently limited to Ubuntu to minimize CI usage)
+* **Windows Support** — Complete Windows platform support with comprehensive testing
+* **macOS Testing** — Expanded macOS test coverage in CI pipeline
 
 ---
 
