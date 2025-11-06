@@ -46,10 +46,10 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run tests
-        run: cargo test --verbose --all-features
+        run: cargo test --verbose --all-features -- --test-threads=1
 
       - name: Run integration tests
-        run: cargo test --test integration_test --verbose
+        run: cargo test --test integration_test --verbose -- --test-threads=1
 
   clippy:
     name: Clippy
