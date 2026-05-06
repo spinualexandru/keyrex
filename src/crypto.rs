@@ -120,7 +120,7 @@ fn is_running_under_cargo_test() -> bool {
     *IS_TEST_BINARY.get_or_init(|| {
         std::env::current_exe()
             .ok()
-            .and_then(|path| {
+            .map(|path| {
                 let is_in_deps_dir = path
                     .parent()
                     .and_then(|parent| parent.file_name())
@@ -130,7 +130,7 @@ fn is_running_under_cargo_test() -> bool {
                     .and_then(|name| name.to_str())
                     .is_some_and(|name| name.rsplit_once('-').is_some());
 
-                Some(is_in_deps_dir && has_test_binary_hash)
+                is_in_deps_dir && has_test_binary_hash
             })
             .unwrap_or(false)
     })
