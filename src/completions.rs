@@ -41,41 +41,40 @@ fn print_dynamic_key_completion(shell: Shell) {
 
 fn print_bash_dynamic_key_completion() {
     println!(
-        "{}",
-        r#"
+        "
 
 # Dynamic KeyRex key completion for get, update, and remove.
-_keyrex_complete_keys_command() {
+_keyrex_complete_keys_command() {{
     local -a keyrex_args=()
     local i=1
 
     while [[ $i -lt $COMP_CWORD ]]; do
-        case "${COMP_WORDS[$i]}" in
+        case \"${{COMP_WORDS[$i]}}\" in
             --config)
                 if [[ $((i + 1)) -lt $COMP_CWORD ]]; then
-                    keyrex_args+=("--config" "${COMP_WORDS[$((i + 1))]}")
+                    keyrex_args+=(\"--config\" \"${{COMP_WORDS[$((i + 1))]}}\")
                     i=$((i + 2))
                     continue
                 fi
                 ;;
             --config=*)
-                keyrex_args+=("${COMP_WORDS[$i]}")
+                keyrex_args+=(\"${{COMP_WORDS[$i]}}\")
                 ;;
         esac
         i=$((i + 1))
     done
 
-    command keyrex "${keyrex_args[@]}" keys 2>/dev/null
-}
+    command keyrex \"${{keyrex_args[@]}}\" keys 2>/dev/null
+}}
 
-_keyrex_complete_with_keys() {
+_keyrex_complete_with_keys() {{
     local cur subcommand key
     local subcommand_index=0
     local i=1
-    cur="${COMP_WORDS[COMP_CWORD]}"
+    cur=\"${{COMP_WORDS[COMP_CWORD]}}\"
 
     while [[ $i -lt $COMP_CWORD ]]; do
-        case "${COMP_WORDS[$i]}" in
+        case \"${{COMP_WORDS[$i]}}\" in
             --config)
                 i=$((i + 2))
                 continue
@@ -89,37 +88,36 @@ _keyrex_complete_with_keys() {
                 continue
                 ;;
             *)
-                subcommand="${COMP_WORDS[$i]}"
+                subcommand=\"${{COMP_WORDS[$i]}}\"
                 subcommand_index=$i
                 break
                 ;;
         esac
     done
 
-    case "$subcommand" in
+    case \"$subcommand\" in
         get|update|remove)
             if [[ $COMP_CWORD -eq $((subcommand_index + 1)) ]]; then
                 COMPREPLY=()
                 while IFS= read -r key; do
-                    [[ "$key" == "$cur"* ]] && COMPREPLY+=("$key")
+                    [[ \"$key\" == \"$cur\"* ]] && COMPREPLY+=(\"$key\")
                 done < <(_keyrex_complete_keys_command)
                 return 0
             fi
             ;;
     esac
 
-    _keyrex "$@"
-}
+    _keyrex \"$@\"
+}}
 
 complete -F _keyrex_complete_with_keys -o bashdefault -o default keyrex
-"#
+"
     );
 }
 
 fn print_fish_dynamic_key_completion() {
     println!(
-        "{}",
-        r#"
+        "
 
 # Dynamic KeyRex key completion for get, update, and remove.
 function __keyrex_complete_keys
@@ -146,47 +144,46 @@ function __keyrex_complete_keys
 end
 
 complete -c keyrex -n '__fish_seen_subcommand_from get update remove' -f -a '(__keyrex_complete_keys)'
-"#
+"
     );
 }
 
 fn print_zsh_dynamic_key_completion() {
     println!(
-        "{}",
-        r#"
+        "
 
 # Dynamic KeyRex key completion for get, update, and remove.
-_keyrex_complete_keys_command() {
+_keyrex_complete_keys_command() {{
     local -a keyrex_args keys
     local -i i=2
 
     while (( i < CURRENT )); do
-        case "${words[$i]}" in
+        case \"${{words[$i]}}\" in
             --config)
                 if (( i + 1 < CURRENT )); then
-                    keyrex_args+=(--config "${words[$((i + 1))]}")
+                    keyrex_args+=(--config \"${{words[$((i + 1))]}}\")
                     (( i += 2 ))
                     continue
                 fi
                 ;;
             --config=*)
-                keyrex_args+=("${words[$i]}")
+                keyrex_args+=(\"${{words[$i]}}\")
                 ;;
         esac
         (( i++ ))
     done
 
-    keys=("${(@f)$(command keyrex "${keyrex_args[@]}" keys 2>/dev/null)}")
+    keys=(\"${{(@f)$(command keyrex \"${{keyrex_args[@]}}\" keys 2>/dev/null)}}\")
     compadd -a keys
-}
+}}
 
-_keyrex_complete_with_keys() {
+_keyrex_complete_with_keys() {{
     local subcommand
     local -i subcommand_index=0
     local -i i=2
 
     while (( i < CURRENT )); do
-        case "${words[$i]}" in
+        case \"${{words[$i]}}\" in
             --config)
                 (( i += 2 ))
                 continue
@@ -200,14 +197,14 @@ _keyrex_complete_with_keys() {
                 continue
                 ;;
             *)
-                subcommand="${words[$i]}"
+                subcommand=\"${{words[$i]}}\"
                 subcommand_index=$i
                 break
                 ;;
         esac
     done
 
-    case "$subcommand" in
+    case \"$subcommand\" in
         get|update|remove)
             if (( CURRENT == subcommand_index + 1 )); then
                 _keyrex_complete_keys_command
@@ -216,11 +213,11 @@ _keyrex_complete_with_keys() {
             ;;
     esac
 
-    _keyrex "$@"
-}
+    _keyrex \"$@\"
+}}
 
 compdef _keyrex_complete_with_keys keyrex
-"#
+"
     );
 }
 
