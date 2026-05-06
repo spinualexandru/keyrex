@@ -1,6 +1,6 @@
 [package]
 name = "keyrex"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Secure, lightweight key-value vault for managing secrets locally using AES-256-GCM encryption."
 keywords = ["rust", "encryption", "vault", "cli", "security"]
@@ -20,18 +20,18 @@ clap_complete = "4.5.65"
 colored = "3.0.0"
 dirs = "6.0.0"
 fslock = "0.2.1"
-hmac = "0.12.1"
-pbkdf2 = "0.12.2"
-rand = "0.9.2"
+hmac = "0.13.0"
+pbkdf2 = "0.13.0"
+rand = "0.10.1"
 rpassword = "7.4.0"
 secrecy = { version = "0.10.3", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive", "serde_derive"] }
 serde_json = { version = "1.0.145", features = ["raw_value"] }
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 shellexpand = "3.1.1"
 subtle = "2.6.1"
 thiserror = "2.0.17"
-toml = "0.9.8"
+toml = "1.1.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
 zeroize = "1.8.2"

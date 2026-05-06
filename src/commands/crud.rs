@@ -1,10 +1,10 @@
 //! CRUD (Create, Read, Update, Delete) operations for vault entries
 
+use crate::clipboard;
 use crate::output;
 use crate::security;
 use crate::session;
 use crate::vault::Vault;
-use arboard::Clipboard;
 use colored::Colorize;
 
 pub fn handle_add(vault: &mut Vault, key: String, value: String, is_encrypted: bool) {
@@ -44,27 +44,16 @@ pub fn handle_get(vault: &mut Vault, key: String, copy: bool, is_encrypted: bool
     }
     if let Some(entry) = vault.get_entry(&key) {
         if copy {
-            match Clipboard::new() {
-                Ok(mut clipboard) => {
-                    match clipboard.set_text(entry.value.clone()) {
-                        Ok(_) => {
-                            println!("{}", "✓ Value copied to clipboard".green().bold());
-                            session::save_vault(vault, is_encrypted); // Save to update last_accessed_at
-                            return; // Exit without printing value (secure)
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "{}",
-                                format!("✗ Failed to copy to clipboard: {}", e).red().bold()
-                            );
-                            std::process::exit(1);
-                        }
-                    }
+            match clipboard::copy_text(&entry.value) {
+                Ok(()) => {
+                    println!("{}", "✓ Value copied to clipboard".green().bold());
+                    session::save_vault(vault, is_encrypted); // Save to update last_accessed_at
+                    return; // Exit without printing value (secure)
                 }
                 Err(e) => {
                     eprintln!(
                         "{}",
-                        format!("✗ Clipboard not available: {}", e).red().bold()
+                        format!("✗ Failed to copy to clipboard: {}", e).red().bold()
                     );
                     std::process::exit(1);
                 }
