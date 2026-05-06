@@ -1,6 +1,7 @@
 //! Query operations for searching and displaying vault information
 
 use crate::vault::Vault;
+use chrono::{DateTime, Local, Utc};
 use colored::Colorize;
 
 pub fn handle_list(vault: &Vault, values: bool, sort: bool) {
@@ -92,35 +93,54 @@ pub fn handle_info(vault: &Vault, is_encrypted: bool) {
     println!(
         "  {} {}",
         "Created:".bright_white().bold(),
-        vault
-            .created_at
-            .format("%Y-%m-%d %H:%M:%S UTC")
-            .to_string()
-            .bright_black()
+        format_local_timestamp(vault.created_at).bright_black()
     );
     println!(
         "  {} {}",
         "Last Updated:".bright_white().bold(),
-        vault
-            .last_updated_at
-            .format("%Y-%m-%d %H:%M:%S UTC")
-            .to_string()
-            .bright_black()
+        format_local_timestamp(vault.last_updated_at).bright_black()
     );
     println!(
         "  {} {}",
         "Last Accessed:".bright_white().bold(),
-        vault
-            .last_accessed_at
-            .format("%Y-%m-%d %H:%M:%S UTC")
-            .to_string()
-            .bright_black()
+        format_local_timestamp(vault.last_accessed_at).bright_black()
     );
+}
+
+fn format_local_timestamp(timestamp: DateTime<Utc>) -> String {
+    timestamp
+        .with_timezone(&Local)
+        .format("%Y-%m-%d %H:%M:%S %:z")
+        .to_string()
 }
 
 pub fn handle_keys(vault: &Vault) {
     // Output keys only, one per line, for shell completion
     for key in vault.entries.keys() {
         println!("{}", key);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn format_local_timestamp_uses_system_timezone() {
+        let timestamp = Utc.with_ymd_and_hms(2026, 5, 6, 12, 34, 56).unwrap();
+        let expected = timestamp
+            .with_timezone(&Local)
+            .format("%Y-%m-%d %H:%M:%S %:z")
+            .to_string();
+
+        assert_eq!(format_local_timestamp(timestamp), expected);
+    }
+
+    #[test]
+    fn format_local_timestamp_does_not_label_output_as_utc() {
+        let timestamp = Utc.with_ymd_and_hms(2026, 5, 6, 12, 34, 56).unwrap();
+
+        assert!(!format_local_timestamp(timestamp).ends_with(" UTC"));
     }
 }
