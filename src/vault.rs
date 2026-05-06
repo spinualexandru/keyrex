@@ -16,11 +16,16 @@ use fslock::LockFile;
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use thiserror::Error;
 use tracing::debug;
+
+thread_local! {
+    static VAULT_PATH_OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
 
 #[derive(Error, Debug)]
 pub enum VaultError {
@@ -204,6 +209,11 @@ impl Vault {
 
     /// Get the vault path (can be overridden by configuration)
     pub fn get_user_vault_path() -> Result<PathBuf, VaultError> {
+        if let Some(custom_path) = VAULT_PATH_OVERRIDE.with(|path| path.borrow().clone()) {
+            debug!(path = %custom_path.display(), "Using custom vault path override");
+            return Ok(custom_path);
+        }
+
         // Check if a custom path was set via environment/config
         // This will be called from main after config is loaded
         if let Ok(custom_path) = std::env::var("KEYREX_VAULT_PATH") {
@@ -227,10 +237,21 @@ impl Vault {
             fs::create_dir_all(parent)?;
         }
 
-        // Store in environment variable for this process
-        std::env::set_var("KEYREX_VAULT_PATH", path.to_string_lossy().to_string());
+        VAULT_PATH_OVERRIDE.with(|override_path| {
+            *override_path.borrow_mut() = Some(path.clone());
+        });
         debug!(path = %path.display(), "Set custom vault path");
         Ok(())
+    }
+
+    /// Clear the thread-local vault path override.
+    ///
+    /// This is primarily useful for tests and long-lived embedding contexts that need to
+    /// restore default path resolution after calling `set_vault_path`.
+    pub fn clear_vault_path_override() {
+        VAULT_PATH_OVERRIDE.with(|override_path| {
+            *override_path.borrow_mut() = None;
+        });
     }
 
     /// Gets the path to the lock file

@@ -85,6 +85,7 @@ path = "{}"
 
     /// Clean up the test environment (called automatically on drop)
     fn cleanup(&self) {
+        keyrex::vault::Vault::clear_vault_path_override();
         let _ = fs::remove_dir_all(&self.test_dir);
     }
 }

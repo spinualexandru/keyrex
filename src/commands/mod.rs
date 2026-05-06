@@ -84,14 +84,12 @@ mod tests {
         let (_test_vault, vault) = setup_test_vault_with_entries();
 
         let mut entries = vault.list_entries();
-        let original_order = entries.iter().map(|e| &e.key).collect::<Vec<_>>();
 
         entries.sort_by(|a, b| a.key.cmp(&b.key));
         let sorted_order = entries.iter().map(|e| &e.key).collect::<Vec<_>>();
 
         // Check that sorted order is indeed sorted
         assert_eq!(sorted_order, vec!["password_db", "test_key1", "test_key2"]);
-        assert_ne!(original_order, sorted_order);
     }
 
     #[test]

@@ -32,8 +32,7 @@ pub fn setup_test_env(test_name: &str) -> (std::sync::MutexGuard<'static, ()>, P
         let _ = std::fs::create_dir_all(parent);
     }
 
-    // Set the test vault path
-    std::env::set_var("KEYREX_VAULT_PATH", test_path.to_string_lossy().to_string());
+    crate::vault::Vault::set_vault_path(test_path.clone()).expect("Failed to set test vault path");
 
     (guard, test_path)
 }
@@ -45,8 +44,7 @@ pub fn cleanup_test_env(test_path: &std::path::Path) {
         let _ = std::fs::remove_dir_all(parent);
     }
 
-    // Clear the environment variable
-    std::env::remove_var("KEYREX_VAULT_PATH");
+    crate::vault::Vault::clear_vault_path_override();
 }
 
 /// A test vault that automatically sets up and tears down an isolated test environment
