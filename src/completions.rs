@@ -22,11 +22,203 @@ pub fn handle_completions(shell: Shell) {
     );
 
     generate(shell, &mut cmd, bin_name, &mut io::stdout());
+    print_dynamic_key_completion(shell);
 
     eprintln!();
     eprintln!("{}", "Installation instructions:".green().bold());
 
     print_completion_instructions(shell);
+}
+
+fn print_dynamic_key_completion(shell: Shell) {
+    match shell {
+        Shell::Bash => print_bash_dynamic_key_completion(),
+        Shell::Fish => print_fish_dynamic_key_completion(),
+        Shell::Zsh => print_zsh_dynamic_key_completion(),
+        _ => {}
+    }
+}
+
+fn print_bash_dynamic_key_completion() {
+    println!(
+        "
+
+# Dynamic KeyRex key completion for get, update, and remove.
+_keyrex_complete_keys_command() {{
+    local -a keyrex_args=()
+    local i=1
+
+    while [[ $i -lt $COMP_CWORD ]]; do
+        case \"${{COMP_WORDS[$i]}}\" in
+            --config)
+                if [[ $((i + 1)) -lt $COMP_CWORD ]]; then
+                    keyrex_args+=(\"--config\" \"${{COMP_WORDS[$((i + 1))]}}\")
+                    i=$((i + 2))
+                    continue
+                fi
+                ;;
+            --config=*)
+                keyrex_args+=(\"${{COMP_WORDS[$i]}}\")
+                ;;
+        esac
+        i=$((i + 1))
+    done
+
+    command keyrex \"${{keyrex_args[@]}}\" keys 2>/dev/null
+}}
+
+_keyrex_complete_with_keys() {{
+    local cur subcommand key
+    local subcommand_index=0
+    local i=1
+    cur=\"${{COMP_WORDS[COMP_CWORD]}}\"
+
+    while [[ $i -lt $COMP_CWORD ]]; do
+        case \"${{COMP_WORDS[$i]}}\" in
+            --config)
+                i=$((i + 2))
+                continue
+                ;;
+            --config=*)
+                i=$((i + 1))
+                continue
+                ;;
+            -*)
+                i=$((i + 1))
+                continue
+                ;;
+            *)
+                subcommand=\"${{COMP_WORDS[$i]}}\"
+                subcommand_index=$i
+                break
+                ;;
+        esac
+    done
+
+    case \"$subcommand\" in
+        get|update|remove)
+            if [[ $COMP_CWORD -eq $((subcommand_index + 1)) ]]; then
+                COMPREPLY=()
+                while IFS= read -r key; do
+                    [[ \"$key\" == \"$cur\"* ]] && COMPREPLY+=(\"$key\")
+                done < <(_keyrex_complete_keys_command)
+                return 0
+            fi
+            ;;
+    esac
+
+    _keyrex \"$@\"
+}}
+
+complete -F _keyrex_complete_with_keys -o bashdefault -o default keyrex
+"
+    );
+}
+
+fn print_fish_dynamic_key_completion() {
+    println!(
+        "
+
+# Dynamic KeyRex key completion for get, update, and remove.
+function __keyrex_complete_keys
+    set -l tokens (commandline -opc)
+    set -l keyrex_args
+    set -l i 1
+
+    while test $i -le (count $tokens)
+        switch $tokens[$i]
+            case --config
+                set -l next (math $i + 1)
+                if test $next -le (count $tokens)
+                    set -a keyrex_args --config $tokens[$next]
+                    set i (math $i + 2)
+                    continue
+                end
+            case '--config=*'
+                set -a keyrex_args $tokens[$i]
+        end
+        set i (math $i + 1)
+    end
+
+    command keyrex $keyrex_args keys 2>/dev/null
+end
+
+complete -c keyrex -n '__fish_seen_subcommand_from get update remove' -f -a '(__keyrex_complete_keys)'
+"
+    );
+}
+
+fn print_zsh_dynamic_key_completion() {
+    println!(
+        "
+
+# Dynamic KeyRex key completion for get, update, and remove.
+_keyrex_complete_keys_command() {{
+    local -a keyrex_args keys
+    local -i i=2
+
+    while (( i < CURRENT )); do
+        case \"${{words[$i]}}\" in
+            --config)
+                if (( i + 1 < CURRENT )); then
+                    keyrex_args+=(--config \"${{words[$((i + 1))]}}\")
+                    (( i += 2 ))
+                    continue
+                fi
+                ;;
+            --config=*)
+                keyrex_args+=(\"${{words[$i]}}\")
+                ;;
+        esac
+        (( i++ ))
+    done
+
+    keys=(\"${{(@f)$(command keyrex \"${{keyrex_args[@]}}\" keys 2>/dev/null)}}\")
+    compadd -a keys
+}}
+
+_keyrex_complete_with_keys() {{
+    local subcommand
+    local -i subcommand_index=0
+    local -i i=2
+
+    while (( i < CURRENT )); do
+        case \"${{words[$i]}}\" in
+            --config)
+                (( i += 2 ))
+                continue
+                ;;
+            --config=*)
+                (( i++ ))
+                continue
+                ;;
+            -*)
+                (( i++ ))
+                continue
+                ;;
+            *)
+                subcommand=\"${{words[$i]}}\"
+                subcommand_index=$i
+                break
+                ;;
+        esac
+    done
+
+    case \"$subcommand\" in
+        get|update|remove)
+            if (( CURRENT == subcommand_index + 1 )); then
+                _keyrex_complete_keys_command
+                return
+            fi
+            ;;
+    esac
+
+    _keyrex \"$@\"
+}}
+
+compdef _keyrex_complete_with_keys keyrex
+"
+    );
 }
 
 fn print_completion_instructions(shell: Shell) {
@@ -55,18 +247,7 @@ fn print_bash_instructions() {
     eprintln!();
     eprintln!(
         "{}",
-        "For dynamic key completion, also add:".yellow().bold()
-    );
-    eprintln!("    {}", "_keyrex_complete_keys() {".bright_black());
-    eprintln!(
-        "    {}",
-        "        COMPREPLY=($(compgen -W \"$(keyrex keys 2>/dev/null)\" -- \"${COMP_WORDS[COMP_CWORD]}\"))"
-            .bright_black()
-    );
-    eprintln!("    {}", "    }".bright_black());
-    eprintln!(
-        "    {}",
-        "    complete -F _keyrex_complete_keys -o default keyrex".bright_black()
+        "Dynamic key completion is included for get, update, and remove.".yellow()
     );
 }
 
@@ -79,105 +260,7 @@ fn print_fish_instructions() {
     eprintln!();
     eprintln!(
         "{}",
-        "For dynamic key completion, create this file:"
-            .yellow()
-            .bold()
-    );
-    eprintln!("  {}:", "~/.config/fish/completions/keyrex.fish".cyan());
-    eprintln!();
-    eprintln!(
-        "    {}",
-        "# Complete keyrex keys for get, update, and remove commands".bright_black()
-    );
-    eprintln!(
-        "    {}",
-        "complete -c keyrex -n '__fish_seen_subcommand_from get' -a '(keyrex keys 2>/dev/null)'"
-            .bright_black()
-    );
-    eprintln!(
-        "    {}",
-        "complete -c keyrex -n '__fish_seen_subcommand_from update' -a '(keyrex keys 2>/dev/null)'"
-            .bright_black()
-    );
-    eprintln!(
-        "    {}",
-        "complete -c keyrex -n '__fish_seen_subcommand_from remove' -a '(keyrex keys 2>/dev/null)'"
-            .bright_black()
-    );
-    eprintln!();
-    eprintln!("    {}", "# Standard completions".bright_black());
-    eprintln!("    {}", "complete -c keyrex -f".bright_black());
-    eprintln!(
-        "    {}",
-        "complete -c keyrex -n '__fish_use_subcommand' -a 'add' -d 'Add a new entry to the vault'"
-            .bright_black()
-    );
-    eprintln!(
-        "    {}",
-        "complete -c keyrex -n '__fish_use_subcommand' -a 'get' -d 'Get an entry from the vault'"
-            .bright_black()
-    );
-    eprintln!(
-        "    {}",
-        "complete -c keyrex -n '__fish_use_subcommand' -a 'update' -d 'Update an existing entry'"
-            .bright_black()
-    );
-    eprintln!(
-        "    {}",
-        "complete -c keyrex -n '__fish_use_subcommand' -a 'remove' -d 'Remove an entry from the vault'"
-            .bright_black()
-    );
-    eprintln!(
-        "    {}",
-        "complete -c keyrex -n '__fish_use_subcommand' -a 'list' -d 'List all entries'"
-            .bright_black()
-    );
-    eprintln!(
-        "    {}",
-        "complete -c keyrex -n '__fish_use_subcommand' -a 'search' -d 'Search for entries'"
-            .bright_black()
-    );
-    eprintln!(
-        "    {}",
-        "complete -c keyrex -n '__fish_use_subcommand' -a 'info' -d 'Show vault information'"
-            .bright_black()
-    );
-    eprintln!(
-        "    {}",
-        "complete -c keyrex -n '__fish_use_subcommand' -a 'clear' -d 'Clear all entries'"
-            .bright_black()
-    );
-    eprintln!();
-    eprintln!("    {}", "# Options for specific commands".bright_black());
-    eprintln!(
-        "    {}",
-        "complete -c keyrex -n '__fish_seen_subcommand_from get' -s c -l copy -d 'Copy value to clipboard'"
-            .bright_black()
-    );
-    eprintln!(
-        "    {}",
-        "complete -c keyrex -n '__fish_seen_subcommand_from remove' -s y -l yes -d 'Skip confirmation'"
-            .bright_black()
-    );
-    eprintln!(
-        "    {}",
-        "complete -c keyrex -n '__fish_seen_subcommand_from list' -s v -l values -d 'Show values'"
-            .bright_black()
-    );
-    eprintln!(
-        "    {}",
-        "complete -c keyrex -n '__fish_seen_subcommand_from list' -s s -l sort -d 'Sort alphabetically'"
-            .bright_black()
-    );
-    eprintln!(
-        "    {}",
-        "complete -c keyrex -n '__fish_seen_subcommand_from search' -s v -l values -d 'Show values'"
-            .bright_black()
-    );
-    eprintln!(
-        "    {}",
-        "complete -c keyrex -n '__fish_seen_subcommand_from clear' -s y -l yes -d 'Skip confirmation'"
-            .bright_black()
+        "Dynamic key completion is included for get, update, and remove.".yellow()
     );
 }
 
@@ -195,15 +278,7 @@ fn print_zsh_instructions() {
     eprintln!();
     eprintln!(
         "{}",
-        "For dynamic key completion, also add:".yellow().bold()
-    );
-    eprintln!(
-        "    {}",
-        "_keyrex_keys() { _values 'keys' $(keyrex keys 2>/dev/null) }".bright_black()
-    );
-    eprintln!(
-        "    {}",
-        "    compdef _keyrex_keys keyrex get update remove".bright_black()
+        "Dynamic key completion is included for get, update, and remove.".yellow()
     );
 }
 

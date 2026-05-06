@@ -1,7 +1,8 @@
 use clap::Parser;
 use colored::Colorize;
-use keyrex::cli::Cli;
+use keyrex::cli::{Cli, Command};
 use keyrex::commands::handle_command;
+use keyrex::completions;
 use keyrex::config;
 use keyrex::crypto::{prompt_password, reset_attempts};
 use keyrex::logging;
@@ -71,6 +72,29 @@ fn main() {
                 std::process::exit(1);
             }
         };
+
+    match &cli.command {
+        Command::Completions { shell } => {
+            completions::handle_completions(*shell);
+            return;
+        }
+        Command::Keys if is_encrypted => {
+            debug!("Skipping key completion for locked encrypted vault");
+            return;
+        }
+        Command::Keys => {
+            debug!("Loading unencrypted vault for key completion");
+            match Vault::load() {
+                Ok(mut vault) => handle_command(Command::Keys, &mut vault, false),
+                Err(e) => {
+                    error!(error = %e, "Failed to load vault for key completion");
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+        _ => {}
+    }
 
     let mut vault = if is_encrypted {
         info!("Loading encrypted vault");

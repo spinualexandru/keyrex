@@ -5,6 +5,7 @@
 //! for testing and integration purposes.
 
 pub mod cli;
+pub mod clipboard;
 pub mod commands;
 pub mod completions;
 pub mod config;

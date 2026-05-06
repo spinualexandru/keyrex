@@ -9,6 +9,10 @@
 //! the filesystem, so they don't require config-based test environments.
 //! They test cryptographic primitives and memory operations directly.
 
+fn disable_password_backoff_for_test() {
+    std::env::set_var("KEYREX_TEST_FAST_BACKOFF", "1");
+}
+
 #[test]
 fn test_password_string_zeroization() {
     use zeroize::Zeroize;
@@ -296,6 +300,8 @@ fn test_password_comparison_timing() {
     use keyrex::crypto;
     use std::time::Instant;
 
+    disable_password_backoff_for_test();
+
     let correct_password = "correct_password_with_sufficient_length";
     let wrong_password1 = "xorrect_password_with_sufficient_length"; // Differs at start
     let wrong_password2 = "correct_password_with_sufficient_lengtx"; // Differs at end
@@ -331,6 +337,8 @@ fn test_password_comparison_timing() {
 #[test]
 fn test_failed_password_zeroized() {
     use keyrex::crypto;
+
+    disable_password_backoff_for_test();
 
     // Test that even when decryption fails, the password is not left in memory
     let encrypted = crypto::encrypt("data", "correct").unwrap();

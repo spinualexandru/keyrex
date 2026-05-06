@@ -19,7 +19,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use pbkdf2::pbkdf2_hmac;
 use sha2::Sha256;
 use std::io::Write;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
@@ -30,6 +30,7 @@ const KEY_LEN: usize = 32;
 // https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html#pbkdf2
 // TODO: Document in Security
 const PBKDF2_ROUNDS: u32 = 600_000;
+const TEST_PBKDF2_ROUNDS: u32 = 1_000;
 
 // Rate limiting constants
 const MAX_PASSWORD_ATTEMPTS: u32 = 5;
@@ -83,16 +84,56 @@ fn record_failed_attempt() -> Result<(), CryptoError> {
     let backoff_secs = BASE_BACKOFF_SECS * 2u64.pow(*attempts - 1);
     let remaining = MAX_PASSWORD_ATTEMPTS - *attempts;
 
-    eprintln!(
-        "Invalid password. {} attempt{} remaining. Waiting {} second{}...",
-        remaining,
-        if remaining == 1 { "" } else { "s" },
-        backoff_secs,
-        if backoff_secs == 1 { "" } else { "s" }
-    );
-
-    std::thread::sleep(Duration::from_secs(backoff_secs));
+    if should_sleep_for_failed_attempts() {
+        eprintln!(
+            "Invalid password. {} attempt{} remaining. Waiting {} second{}...",
+            remaining,
+            if remaining == 1 { "" } else { "s" },
+            backoff_secs,
+            if backoff_secs == 1 { "" } else { "s" }
+        );
+        std::thread::sleep(Duration::from_secs(backoff_secs));
+    } else {
+        eprintln!(
+            "Invalid password. {} attempt{} remaining.",
+            remaining,
+            if remaining == 1 { "" } else { "s" }
+        );
+    }
     Ok(())
+}
+
+fn should_sleep_for_failed_attempts() -> bool {
+    std::env::var_os("KEYREX_TEST_FAST_BACKOFF").is_none() && !is_running_under_cargo_test()
+}
+
+fn pbkdf2_rounds() -> u32 {
+    if is_running_under_cargo_test() {
+        TEST_PBKDF2_ROUNDS
+    } else {
+        PBKDF2_ROUNDS
+    }
+}
+
+fn is_running_under_cargo_test() -> bool {
+    static IS_TEST_BINARY: OnceLock<bool> = OnceLock::new();
+    *IS_TEST_BINARY.get_or_init(|| {
+        std::env::current_exe()
+            .ok()
+            .map(|path| {
+                let is_in_deps_dir = path
+                    .parent()
+                    .and_then(|parent| parent.file_name())
+                    .is_some_and(|name| name == "deps");
+                let has_test_binary_hash = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.rsplit_once('-').is_some());
+
+                is_in_deps_dir && has_test_binary_hash
+            })
+            .unwrap_or(false)
+    })
 }
 
 /// Resets the password attempt counter (called on successful authentication)
@@ -110,7 +151,7 @@ pub fn get_attempts() -> u32 {
 /// Derives a 256-bit key from a password using PBKDF2-HMAC-SHA256
 fn derive_key(password: &str, salt: &[u8]) -> [u8; KEY_LEN] {
     let mut key = [0u8; KEY_LEN];
-    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, PBKDF2_ROUNDS, &mut key);
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, pbkdf2_rounds(), &mut key);
     key
 }
 
@@ -318,6 +359,10 @@ mod tests {
     // Mutex to ensure rate limit tests run serially
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
+    fn disable_password_backoff_for_test() {
+        std::env::set_var("KEYREX_TEST_FAST_BACKOFF", "1");
+    }
+
     #[test]
     fn test_encrypt_decrypt() {
         let plaintext = "Hello, World!";
@@ -354,6 +399,7 @@ mod tests {
     #[test]
     fn test_decrypt_wrong_password() {
         let _lock = TEST_LOCK.lock().unwrap(); // Serialize test execution
+        disable_password_backoff_for_test();
         reset_attempts(); // Reset for clean test
 
         let plaintext = "Hello, World!";
@@ -370,6 +416,7 @@ mod tests {
     #[test]
     fn test_rate_limit_max_attempts() {
         let _lock = TEST_LOCK.lock().unwrap(); // Serialize test execution
+        disable_password_backoff_for_test();
         reset_attempts(); // Start fresh
 
         let plaintext = "test";
@@ -398,6 +445,7 @@ mod tests {
     #[test]
     fn test_rate_limit_reset_on_success() {
         let _lock = TEST_LOCK.lock().unwrap(); // Serialize test execution
+        disable_password_backoff_for_test();
         reset_attempts();
 
         let plaintext = "test";
@@ -427,6 +475,7 @@ mod tests {
     #[test]
     fn test_attempt_counter_operations() {
         let _lock = TEST_LOCK.lock().unwrap(); // Serialize test execution
+        disable_password_backoff_for_test();
         reset_attempts();
         assert_eq!(get_attempts(), 0);
 

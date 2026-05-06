@@ -6,6 +6,8 @@
 mod common;
 
 use common::{with_test_env, TestEnvironment};
+use std::fs;
+use std::process::Command;
 
 #[test]
 fn test_vault_creation_with_config() {
@@ -148,6 +150,54 @@ fn test_vault_operations_with_config_isolation() {
             .vault_path
             .to_string_lossy()
             .contains("keyrex_tests/vault_operations"));
+    });
+}
+
+#[test]
+fn test_keys_command_lists_plain_vault_keys() {
+    with_test_env("keys_command_plain_vault", |env| {
+        let mut vault = keyrex::vault::Vault::new();
+        vault
+            .add_entry("alpha_secret".to_string(), "value".to_string())
+            .unwrap();
+        vault
+            .add_entry("beta_token".to_string(), "value".to_string())
+            .unwrap();
+        fs::write(&env.vault_path, serde_json::to_string(&vault).unwrap()).unwrap();
+
+        let output = Command::new(env!("CARGO_BIN_EXE_keyrex"))
+            .args(["--config", &env.config_str(), "keys"])
+            .output()
+            .expect("Failed to run keyrex keys");
+
+        assert!(output.status.success());
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.contains("alpha_secret"));
+        assert!(stdout.contains("beta_token"));
+        assert!(!stdout.contains("Initialized new vault"));
+    });
+}
+
+#[test]
+fn test_keys_command_is_quiet_for_encrypted_vault() {
+    with_test_env("keys_command_encrypted_vault", |env| {
+        let mut vault = keyrex::vault::Vault::new();
+        vault
+            .add_entry("alpha_secret".to_string(), "value".to_string())
+            .unwrap();
+        let encrypted =
+            keyrex::crypto::encrypt(&serde_json::to_string(&vault).unwrap(), "StrongPass123!")
+                .unwrap();
+        fs::write(&env.vault_path, encrypted).unwrap();
+
+        let output = Command::new(env!("CARGO_BIN_EXE_keyrex"))
+            .args(["--config", &env.config_str(), "keys"])
+            .output()
+            .expect("Failed to run keyrex keys");
+
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(output.stderr.is_empty());
     });
 }
 
