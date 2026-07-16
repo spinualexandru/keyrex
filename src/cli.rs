@@ -84,10 +84,10 @@ pub enum Command {
         yes: bool,
     },
 
-    #[command(about = "Generate shell completions")]
+    #[command(about = "Generate or install shell completions")]
     Completions {
-        #[arg(help = "Shell to generate completions for (bash, fish, zsh, powershell, elvish)")]
-        shell: Shell,
+        #[command(subcommand)]
+        command: CompletionCommand,
     },
 
     #[command(about = "List keys only (for shell completion)", hide = true)]
@@ -98,6 +98,57 @@ pub enum Command {
 
     #[command(about = "Disable encryption on the KeyRex vault")]
     Decrypt,
+}
+
+#[derive(Subcommand, Debug, Clone, Copy)]
+pub enum CompletionCommand {
+    #[command(about = "Generate Bash completions to stdout")]
+    Bash,
+
+    #[command(about = "Generate Elvish completions to stdout")]
+    Elvish,
+
+    #[command(about = "Generate Fish completions to stdout")]
+    Fish,
+
+    #[command(
+        name = "powershell",
+        about = "Generate PowerShell completions to stdout"
+    )]
+    PowerShell,
+
+    #[command(about = "Generate Zsh completions to stdout")]
+    Zsh,
+
+    #[command(about = "Install completions for the current or selected shell")]
+    Install {
+        #[arg(
+            long,
+            value_enum,
+            help = "Shell to install for; detects the current shell when omitted"
+        )]
+        shell: Option<Shell>,
+
+        #[arg(
+            long,
+            help = "Replace an existing completion file not managed by KeyRex"
+        )]
+        force: bool,
+    },
+}
+
+impl CompletionCommand {
+    /// Return the shell selected by a completion generation command.
+    pub fn generation_shell(self) -> Option<Shell> {
+        match self {
+            Self::Bash => Some(Shell::Bash),
+            Self::Elvish => Some(Shell::Elvish),
+            Self::Fish => Some(Shell::Fish),
+            Self::PowerShell => Some(Shell::PowerShell),
+            Self::Zsh => Some(Shell::Zsh),
+            Self::Install { .. } => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -446,8 +497,8 @@ mod tests {
     fn test_parse_completions_bash() {
         let cli = parse_cli(&["completions", "bash"]).unwrap();
         match cli.command {
-            Command::Completions { shell } => {
-                assert_eq!(format!("{:?}", shell), "Bash");
+            Command::Completions { command } => {
+                assert!(matches!(command, CompletionCommand::Bash));
             }
             _ => panic!("Expected Completions command"),
         }
@@ -457,8 +508,8 @@ mod tests {
     fn test_parse_completions_zsh() {
         let cli = parse_cli(&["completions", "zsh"]).unwrap();
         match cli.command {
-            Command::Completions { shell } => {
-                assert_eq!(format!("{:?}", shell), "Zsh");
+            Command::Completions { command } => {
+                assert!(matches!(command, CompletionCommand::Zsh));
             }
             _ => panic!("Expected Completions command"),
         }
@@ -468,10 +519,39 @@ mod tests {
     fn test_parse_completions_fish() {
         let cli = parse_cli(&["completions", "fish"]).unwrap();
         match cli.command {
-            Command::Completions { shell } => {
-                assert_eq!(format!("{:?}", shell), "Fish");
+            Command::Completions { command } => {
+                assert!(matches!(command, CompletionCommand::Fish));
             }
             _ => panic!("Expected Completions command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_completions_install_with_detection() {
+        let cli = parse_cli(&["completions", "install"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Completions {
+                command: CompletionCommand::Install {
+                    shell: None,
+                    force: false
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn test_parse_completions_install_with_shell_and_force() {
+        let cli =
+            parse_cli(&["completions", "install", "--shell", "powershell", "--force"]).unwrap();
+        match cli.command {
+            Command::Completions {
+                command: CompletionCommand::Install { shell, force },
+            } => {
+                assert_eq!(shell, Some(Shell::PowerShell));
+                assert!(force);
+            }
+            _ => panic!("Expected completions install command"),
         }
     }
 

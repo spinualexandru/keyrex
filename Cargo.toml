@@ -1,6 +1,6 @@
 [package]
 name = "keyrex"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "Secure, lightweight key-value vault for managing secrets locally using AES-256-GCM encryption."
 keywords = ["rust", "encryption", "vault", "cli", "security"]
