@@ -115,8 +115,16 @@ fn format_local_timestamp(timestamp: DateTime<Utc>) -> String {
 }
 
 pub fn handle_keys(vault: &Vault) {
-    // Output keys only, one per line, for shell completion
-    for key in vault.entries.keys() {
+    // The completion protocol is newline-delimited, so omit keys containing
+    // control characters rather than emitting ambiguous or misleading entries.
+    let mut keys: Vec<&String> = vault
+        .entries
+        .keys()
+        .filter(|key| !key.chars().any(char::is_control))
+        .collect();
+    keys.sort_unstable();
+
+    for key in keys {
         println!("{}", key);
     }
 }

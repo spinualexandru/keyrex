@@ -1,6 +1,6 @@
 use clap::Parser;
 use colored::Colorize;
-use keyrex::cli::{Cli, Command};
+use keyrex::cli::{Cli, Command, CompletionCommand};
 use keyrex::commands::handle_command;
 use keyrex::completions;
 use keyrex::config;
@@ -17,6 +17,31 @@ fn main() {
     debug!("Starting KeyRex");
     let cli = Cli::parse();
     debug!(?cli, "Parsed CLI arguments");
+
+    if let Command::Completions { command } = &cli.command {
+        let command = *command;
+        let result = match command {
+            CompletionCommand::Install { shell, force } => {
+                completions::handle_install(shell, force)
+            }
+            generation => completions::handle_generation(
+                generation
+                    .generation_shell()
+                    .expect("generation command must select a shell"),
+            ),
+        };
+        if let Err(error) = result {
+            error!(%error, "Shell completion operation failed");
+            eprintln!(
+                "{}",
+                format!("✗ Shell completion operation failed: {}", error)
+                    .red()
+                    .bold()
+            );
+            std::process::exit(1);
+        }
+        return;
+    }
 
     // Load configuration and set vault path
     match config::Config::load(cli.config.clone()) {
@@ -74,10 +99,6 @@ fn main() {
         };
 
     match &cli.command {
-        Command::Completions { shell } => {
-            completions::handle_completions(*shell);
-            return;
-        }
         Command::Keys if is_encrypted => {
             debug!("Skipping key completion for locked encrypted vault");
             return;

@@ -12,7 +12,6 @@ mod query;
 mod security;
 
 use crate::cli::Command;
-use crate::completions;
 use crate::vault::Vault;
 
 /// Route CLI commands to their respective handlers
@@ -27,7 +26,9 @@ pub fn handle_command(command: Command, vault: &mut Vault, is_encrypted: bool) {
         Command::Info => query::handle_info(vault, is_encrypted),
         Command::Clear { yes } => meta::handle_clear(vault, yes, is_encrypted),
         Command::Keys => query::handle_keys(vault),
-        Command::Completions { shell } => completions::handle_completions(shell),
+        Command::Completions { .. } => {
+            unreachable!("completion commands are handled before vault initialization")
+        }
         Command::Encrypt => security::handle_encrypt(vault, is_encrypted),
         Command::Decrypt => security::handle_decrypt(vault, is_encrypted),
     }

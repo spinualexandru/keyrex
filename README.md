@@ -41,48 +41,9 @@ Download the latest release for your platform from the Releases page. <TODO: add
 
 ## Shell Completions
 
-KeyRex provides intelligent shell completions that auto-complete real vault keys.
-
-### Fish
-
-A completion script is automatically generated at `~/.config/fish/completions/keyrex.fish`.
-Reload your shell or run:
-
-```bash
-source ~/.config/fish/completions/keyrex.fish
+```console
+keyrex completions install
 ```
-
-Example:
-
-```bash
-keyrex get oll<TAB>  # auto-completes to 'keyrex get ollama'
-```
-
-### Bash
-
-Add the following to your `~/.bashrc`:
-
-```bash
-source /path/to/keyrex/completions/keyrex.bash
-```
-
-Or install globally:
-
-```bash
-sudo cp completions/keyrex.bash /etc/bash_completion.d/keyrex
-```
-
-Reload your shell or run `source ~/.bashrc`.
-
-### Other Shells
-
-Generate completions manually:
-
-```bash
-keyrex completions <shell>
-```
-
-Available shells: `bash`, `fish`, `zsh`, `powershell`, `elvish`
 
 ---
 
