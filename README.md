@@ -77,6 +77,37 @@ keyrex search <pattern> --values  # Include values in results
 
 ---
 
+### Tagging
+
+Each entry can have multiple tags:
+
+```bash
+keyrex tag mistral ai                 # Add a tag
+keyrex tag mistral europe             # Keep ai and add europe
+keyrex tag mistral europe --replace   # Replace all tags with europe
+keyrex tag mistral ai --remove        # Detach ai from mistral
+keyrex tag mistral --remove           # Detach all tags from mistral
+
+keyrex tag --list                     # List all tags alphabetically
+keyrex tag ai                         # List entry names tagged ai
+keyrex tag ai --include-keys          # Include stored secret values
+
+keyrex tag rename aii ai              # Rename on every entry
+keyrex tag remove ai                  # Detach ai everywhere; keep entries
+```
+
+Tags are case-sensitive and duplicates are ignored. Quote tags containing spaces,
+for example `keyrex tag mistral "european ai"`. Renaming to an existing tag merges
+their memberships. Tags disappear from the list when no entries use them; updating
+a secret preserves its tags. Existing plaintext and encrypted vaults work without
+a migration command.
+
+`rename` and `remove` are tag subcommands. To use either as an entry or tag name,
+put options first and use `--`, for example `keyrex tag -- rename ai` or
+`keyrex tag --include-keys -- remove`.
+
+---
+
 ### Vault Management
 
 ```bash
@@ -156,6 +187,9 @@ Vault Information
 | `remove <key>`         | Delete an entry           | `--yes, -y`: Skip confirmation                                      |
 | `list`                 | List entries              | `--values, -v`: Include values<br>`--sort, -s`: Sort alphabetically |
 | `search <pattern>`     | Search keys or values     | `--values, -v`: Include values                                      |
+| `tag [<name>] [<tag>]` | Tag entries or query tags | `--replace`, `--remove`, `--list`, `--include-keys` |
+| `tag rename <old> <new>` | Rename a tag on every entry | — |
+| `tag remove <tag>` | Remove a tag, keeping entries | — |
 | `info`                 | Show vault metadata       | —                                                                   |
 | `clear`                | Clear all entries         | `--yes, -y`: Skip confirmation                                      |
 | `encrypt`              | Enable AES-256 encryption | —                                                                   |

@@ -3,7 +3,7 @@
 //! This module defines the CLI structure using clap's derive API.
 //! It includes all command definitions and their arguments.
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use clap_complete::Shell;
 use std::path::PathBuf;
 
@@ -75,6 +75,9 @@ pub enum Command {
         values: bool,
     },
 
+    #[command(about = "Tag entries, find entries by tag, or manage tags")]
+    Tag(TagArgs),
+
     #[command(about = "Show KeyRex statistics and information")]
     Info,
 
@@ -98,6 +101,54 @@ pub enum Command {
 
     #[command(about = "Disable encryption on the KeyRex vault")]
     Decrypt,
+}
+
+#[derive(Args, Debug)]
+#[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
+pub struct TagArgs {
+    #[arg(
+        value_name = "NAME",
+        required_unless_present = "list",
+        help = "Entry name when editing tags; tag name when querying"
+    )]
+    pub name: Option<String>,
+
+    #[arg(value_name = "TAG", help = "Tag to add, replace with, or detach")]
+    pub tag: Option<String>,
+
+    #[arg(long, conflicts_with_all = ["name", "tag", "replace", "remove", "include_keys"],
+        help = "List all tags alphabetically")]
+    pub list: bool,
+
+    #[arg(long, requires = "tag", conflicts_with_all = ["remove", "include_keys"],
+        help = "Replace all tags on the entry with TAG")]
+    pub replace: bool,
+
+    #[arg(
+        long,
+        conflicts_with = "include_keys",
+        help = "Detach TAG from the entry, or all tags if TAG is omitted"
+    )]
+    pub remove: bool,
+
+    #[arg(
+        long,
+        conflicts_with = "tag",
+        help = "Include stored secret values in tag query results"
+    )]
+    pub include_keys: bool,
+
+    #[command(subcommand)]
+    pub command: Option<TagCommand>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TagCommand {
+    #[command(about = "Rename a tag on every entry (merges into an existing tag)")]
+    Rename { old: String, new: String },
+
+    #[command(about = "Remove a tag from every entry, keeping the entries")]
+    Remove { tag: String },
 }
 
 #[derive(Subcommand, Debug, Clone, Copy)]
@@ -160,6 +211,58 @@ mod tests {
         let mut cli_args = vec!["keyrex"];
         cli_args.extend(args);
         Cli::try_parse_from(cli_args)
+    }
+
+    #[test]
+    fn test_tag_commands() {
+        for args in [
+            vec!["tag", "mistral", "ai"],
+            vec!["tag", "mistral", "europe", "--replace"],
+            vec!["tag", "mistral", "ai", "--remove"],
+            vec!["tag", "mistral", "--remove"],
+            vec!["tag", "--list"],
+            vec!["tag", "ai"],
+            vec!["tag", "ai", "--include-keys"],
+            vec!["tag", "rename", "aii", "ai"],
+            vec!["tag", "remove", "ai"],
+        ] {
+            assert!(
+                matches!(parse_cli(&args).unwrap().command, Command::Tag(_)),
+                "{args:?}"
+            );
+        }
+        let Command::Tag(args) = parse_cli(&["tag", "--", "rename", "ai"]).unwrap().command else {
+            panic!("Expected Tag command");
+        };
+        assert_eq!(args.name.as_deref(), Some("rename"));
+        assert_eq!(args.tag.as_deref(), Some("ai"));
+        assert!(args.command.is_none());
+    }
+
+    #[test]
+    fn test_invalid_tag_commands() {
+        for args in [
+            vec!["tag"],
+            vec!["tag", "--remove"],
+            vec!["tag", "--include-keys"],
+            vec!["tag", "mistral", "--replace"],
+            vec!["tag", "--list", "ai"],
+            vec!["tag", "--list", "--remove"],
+            vec!["tag", "--list", "--include-keys"],
+            vec!["tag", "mistral", "ai", "--replace", "--remove"],
+            vec!["tag", "mistral", "ai", "--include-keys"],
+            vec!["tag", "mistral", "--remove", "--include-keys"],
+            vec!["tag", "mistral", "ai", "europe"],
+            vec!["tag", "rename", "ai"],
+            vec!["tag", "remove"],
+            vec!["tag", "--list", "remove", "ai"],
+            vec!["tag", "--remove", "rename", "aii", "ai"],
+        ] {
+            assert!(
+                parse_cli(&args).is_err(),
+                "Accepted invalid command: {args:?}"
+            );
+        }
     }
 
     // Basic command parsing tests

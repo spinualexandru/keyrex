@@ -8,7 +8,9 @@ edition = "2021"
 cargo-fuzz = true
 
 [dependencies]
-libfuzzer-sys = "0.4"
+chrono = "0.4.45"
+libfuzzer-sys = "0.4.13"
+serde_json = "1.0.151"
 keyrex = { path = ".." }
 
 # Prevent this from interfering with workspaces

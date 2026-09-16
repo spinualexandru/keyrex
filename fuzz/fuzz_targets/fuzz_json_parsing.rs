@@ -1,7 +1,7 @@
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
 use keyrex::vault::Vault;
+use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     // Fuzzing JSON parsing with arbitrary input
@@ -24,8 +24,9 @@ fuzz_target!(|data: &[u8]| {
             let _ = vault.list_entries();
 
             // Try to access entries
-            for entry in vault.list_entries() {
-                let _ = vault.get_entry(&entry.key);
+            let keys: Vec<_> = vault.entries.keys().cloned().collect();
+            for key in keys {
+                let _ = vault.get_entry(&key);
             }
 
             // Verify HMAC checking doesn't panic

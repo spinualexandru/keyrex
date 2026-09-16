@@ -10,13 +10,13 @@
 //!
 //! Format: `base64(32-byte-salt || 12-byte-nonce || ciphertext)`
 
-use aes_gcm::aead::rand_core::RngCore;
 use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
+    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use pbkdf2::pbkdf2_hmac;
+use rand::{rngs::SysRng, TryRng};
 use sha2::Sha256;
 use std::io::Write;
 use std::sync::{Mutex, OnceLock};
@@ -210,9 +210,15 @@ pub fn validate_password_strength(password: &str) -> Result<(), CryptoError> {
 /// - Zeroizes the key immediately after encryption
 /// - Uses cryptographically secure random salt and nonce
 pub fn encrypt(plaintext: &str, password: &str) -> Result<String, CryptoError> {
-    // Generate random salt
+    // Obtain salt and nonce from the OS before deriving sensitive key material.
     let mut salt = [0u8; SALT_LEN];
-    OsRng.fill_bytes(&mut salt);
+    SysRng
+        .try_fill_bytes(&mut salt)
+        .map_err(|_| CryptoError::EncryptionFailed)?;
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    SysRng
+        .try_fill_bytes(&mut nonce_bytes)
+        .map_err(|_| CryptoError::EncryptionFailed)?;
 
     // Derive encryption key from password
     let mut key = derive_key(password, &salt);
@@ -220,9 +226,6 @@ pub fn encrypt(plaintext: &str, password: &str) -> Result<String, CryptoError> {
     // Create cipher
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| CryptoError::EncryptionFailed)?;
 
-    // Generate random nonce
-    let mut nonce_bytes = [0u8; NONCE_LEN];
-    OsRng.fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from(nonce_bytes);
 
     // Encrypt the data
