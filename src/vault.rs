@@ -17,7 +17,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -61,6 +61,10 @@ const MAX_VALUE_LENGTH: usize = 64 * 1024;
 pub struct Entry {
     pub key: String,
     pub value: String,
+    /// Stored with the entry so deleting it cannot leave dangling tag links.
+    /// Omit empty tags to preserve the integrity checksum of older vaults.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub tags: BTreeSet<String>,
 }
 
 impl Entry {
@@ -109,6 +113,10 @@ impl Entry {
             ));
         }
 
+        for tag in &self.tags {
+            validate_tag(tag)?;
+        }
+
         Ok(())
     }
 
@@ -129,6 +137,15 @@ impl Entry {
             .filter(|c| !c.is_control() || *c == '\n' || *c == '\t' || *c == '\r')
             .collect();
     }
+}
+
+fn validate_tag(tag: &str) -> Result<(), VaultError> {
+    if tag.trim().is_empty() || tag.len() > MAX_KEY_LENGTH || tag.chars().any(char::is_control) {
+        return Err(VaultError::InvalidInput(
+            "Tags must be nonblank, at most 256 bytes, and contain no control characters".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -381,6 +398,11 @@ impl Vault {
         let entry = Entry {
             key: key.clone(),
             value,
+            tags: self
+                .entries
+                .get(&key)
+                .map(|e| e.tags.clone())
+                .unwrap_or_default(),
         };
         entry.validate()?;
         self.entries.insert(key, entry);
@@ -425,6 +447,7 @@ impl Vault {
             let temp_entry = Entry {
                 key: key.to_string(),
                 value: value.clone(),
+                tags: BTreeSet::new(),
             };
             temp_entry.validate()?;
 
@@ -437,6 +460,103 @@ impl Vault {
                 key
             )))
         }
+    }
+
+    /// Add a tag, or replace every tag on one entry. Duplicate additions are a no-op.
+    pub fn tag_entry(&mut self, key: &str, tag: &str, replace: bool) -> Result<bool, VaultError> {
+        validate_tag(tag)?;
+        let entry = self.entries.get_mut(key).ok_or_else(|| {
+            VaultError::InvalidInput(format!("Entry with key '{}' not found", key))
+        })?;
+        let changed = if replace {
+            let tags = BTreeSet::from([tag.to_string()]);
+            let changed = entry.tags != tags;
+            entry.tags = tags;
+            changed
+        } else {
+            entry.tags.insert(tag.to_string())
+        };
+        if changed {
+            self.last_updated_at = Utc::now();
+        }
+        Ok(changed)
+    }
+
+    /// Detach a tag, or all tags, from one entry without changing its value.
+    pub fn untag_entry(&mut self, key: &str, tag: Option<&str>) -> Result<bool, VaultError> {
+        if let Some(tag) = tag {
+            validate_tag(tag)?;
+        }
+        let entry = self.entries.get_mut(key).ok_or_else(|| {
+            VaultError::InvalidInput(format!("Entry with key '{}' not found", key))
+        })?;
+        let changed = if let Some(tag) = tag {
+            entry.tags.remove(tag)
+        } else {
+            let changed = !entry.tags.is_empty();
+            entry.tags.clear();
+            changed
+        };
+        if changed {
+            self.last_updated_at = Utc::now();
+        }
+        Ok(changed)
+    }
+
+    /// Return the distinct tags still attached to entries, in alphabetical order.
+    pub fn list_tags(&self) -> BTreeSet<&str> {
+        self.entries
+            .values()
+            .flat_map(|e| e.tags.iter().map(String::as_str))
+            .collect()
+    }
+
+    /// Return entries with this exact, case-sensitive tag, ordered by entry name.
+    pub fn entries_with_tag(&self, tag: &str) -> Result<Vec<&Entry>, VaultError> {
+        validate_tag(tag)?;
+        let mut entries: Vec<_> = self
+            .entries
+            .values()
+            .filter(|e| e.tags.contains(tag))
+            .collect();
+        entries.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(entries)
+    }
+
+    /// Rename all memberships, merging them if the destination tag already exists.
+    pub fn rename_tag(&mut self, old: &str, new: &str) -> Result<usize, VaultError> {
+        validate_tag(old)?;
+        validate_tag(new)?;
+        if !self.entries.values().any(|e| e.tags.contains(old)) {
+            return Err(VaultError::InvalidInput(format!("Tag '{}' not found", old)));
+        }
+        if old == new {
+            return Ok(0);
+        }
+        let mut changed = 0;
+        for entry in self.entries.values_mut() {
+            if entry.tags.remove(old) {
+                entry.tags.insert(new.to_string());
+                changed += 1;
+            }
+        }
+        self.last_updated_at = Utc::now();
+        Ok(changed)
+    }
+
+    /// Remove a tag from every entry without deleting any entries.
+    pub fn remove_tag(&mut self, tag: &str) -> Result<usize, VaultError> {
+        validate_tag(tag)?;
+        let mut changed = 0;
+        for entry in self.entries.values_mut() {
+            if entry.tags.remove(tag) {
+                changed += 1;
+            }
+        }
+        if changed > 0 {
+            self.last_updated_at = Utc::now();
+        }
+        Ok(changed)
     }
 }
 
@@ -455,6 +575,7 @@ mod tests {
     #[test]
     fn test_entry_empty_key() {
         let entry = Entry {
+            tags: BTreeSet::new(),
             key: String::new(),
             value: "value".to_string(),
         };
@@ -464,6 +585,7 @@ mod tests {
     #[test]
     fn test_entry_empty_value() {
         let entry = Entry {
+            tags: BTreeSet::new(),
             key: "key".to_string(),
             value: String::new(),
         };
@@ -473,6 +595,7 @@ mod tests {
     #[test]
     fn test_entry_key_with_null_bytes() {
         let entry = Entry {
+            tags: BTreeSet::new(),
             key: "key\0bad".to_string(),
             value: "value".to_string(),
         };
@@ -482,6 +605,7 @@ mod tests {
     #[test]
     fn test_entry_value_with_null_bytes() {
         let entry = Entry {
+            tags: BTreeSet::new(),
             key: "key".to_string(),
             value: "value\0bad".to_string(),
         };
@@ -491,6 +615,7 @@ mod tests {
     #[test]
     fn test_entry_key_exceeds_max_length() {
         let entry = Entry {
+            tags: BTreeSet::new(),
             key: "k".repeat(257),
             value: "value".to_string(),
         };
@@ -500,6 +625,7 @@ mod tests {
     #[test]
     fn test_entry_value_exceeds_max_length() {
         let entry = Entry {
+            tags: BTreeSet::new(),
             key: "key".to_string(),
             value: "v".repeat(65 * 1024 + 1),
         };
@@ -509,6 +635,7 @@ mod tests {
     #[test]
     fn test_entry_valid() {
         let entry = Entry {
+            tags: BTreeSet::new(),
             key: "mykey".to_string(),
             value: "myvalue".to_string(),
         };
@@ -518,6 +645,7 @@ mod tests {
     #[test]
     fn test_entry_max_length_keys() {
         let entry = Entry {
+            tags: BTreeSet::new(),
             key: "k".repeat(256),
             value: "v".repeat(64 * 1024),
         };
@@ -527,6 +655,7 @@ mod tests {
     #[test]
     fn test_entry_sanitize() {
         let mut entry = Entry {
+            tags: BTreeSet::new(),
             key: "key\x01\x02".to_string(),
             value: "value\x03\n".to_string(),
         };

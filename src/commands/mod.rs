@@ -10,6 +10,7 @@ mod crud;
 mod meta;
 mod query;
 mod security;
+mod tags;
 
 use crate::cli::Command;
 use crate::vault::Vault;
@@ -23,6 +24,7 @@ pub fn handle_command(command: Command, vault: &mut Vault, is_encrypted: bool) {
         Command::Remove { key, yes } => crud::handle_remove(vault, key, yes, is_encrypted),
         Command::List { values, sort } => query::handle_list(vault, values, sort),
         Command::Search { pattern, values } => query::handle_search(vault, pattern, values),
+        Command::Tag(args) => tags::handle_tag(vault, args, is_encrypted),
         Command::Info => query::handle_info(vault, is_encrypted),
         Command::Clear { yes } => meta::handle_clear(vault, yes, is_encrypted),
         Command::Keys => query::handle_keys(vault),

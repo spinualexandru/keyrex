@@ -252,6 +252,7 @@ fn test_sensitive_data_not_logged() {
     use keyrex::vault::Entry;
 
     let entry = Entry {
+        tags: Default::default(),
         key: "api_key".to_string(),
         value: "secret_api_key_12345".to_string(),
     };

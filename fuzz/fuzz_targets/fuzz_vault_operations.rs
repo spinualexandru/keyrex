@@ -1,8 +1,7 @@
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
 use keyrex::vault::Vault;
-use std::path::PathBuf;
+use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     // Fuzzing vault operations with arbitrary key-value pairs
@@ -50,17 +49,16 @@ fuzz_target!(|data: &[u8]| {
             let new_value = format!("{}_updated", value);
             if let Ok(()) = vault.update_entry(&key, new_value.clone()) {
                 let updated = vault.get_entry(&key);
-                assert_eq!(
-                    updated.unwrap().value,
-                    new_value,
-                    "Updated value mismatch"
-                );
+                assert_eq!(updated.unwrap().value, new_value, "Updated value mismatch");
             }
 
             // Try to remove the entry
             let removed = vault.remove_entry(&key);
             assert!(removed.is_some(), "Remove should return the entry");
-            assert!(vault.get_entry(&key).is_none(), "Entry should not exist after removal");
+            assert!(
+                vault.get_entry(&key).is_none(),
+                "Entry should not exist after removal"
+            );
         }
         Err(_) => {
             // Add failed due to validation (e.g., too long, null bytes)
