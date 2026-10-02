@@ -37,7 +37,7 @@ pub fn handle_add(vault: &mut Vault, key: String, value: String, is_encrypted: b
     }
 }
 
-pub fn handle_get(vault: &mut Vault, key: String, copy: bool, is_encrypted: bool) {
+pub fn handle_get(vault: &mut Vault, key: String, copy: bool) {
     // Check file permissions before CRUD operation
     if let Ok(path) = Vault::get_user_vault_path() {
         security::check_file_permissions_warn(&path);
@@ -47,7 +47,7 @@ pub fn handle_get(vault: &mut Vault, key: String, copy: bool, is_encrypted: bool
             match clipboard::copy_text(&entry.value) {
                 Ok(()) => {
                     println!("{}", "✓ Value copied to clipboard".green().bold());
-                    session::save_vault(vault, is_encrypted); // Save to update last_accessed_at
+                    record_access(vault);
                     return; // Exit without printing value (secure)
                 }
                 Err(e) => {
@@ -60,10 +60,17 @@ pub fn handle_get(vault: &mut Vault, key: String, copy: bool, is_encrypted: bool
             }
         }
         println!("{}", entry.value);
-        session::save_vault(vault, is_encrypted); // Save to update last_accessed_at
+        record_access(vault);
     } else {
         eprintln!("{}", format!("✗ Entry '{}' not found", key).red().bold());
         std::process::exit(1);
+    }
+}
+
+/// The value was already shown, so failing to record the access time is not an error.
+fn record_access(vault: &Vault) {
+    if let Err(error) = vault.record_access() {
+        tracing::debug!(%error, "Could not record vault access time");
     }
 }
 

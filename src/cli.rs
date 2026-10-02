@@ -3,7 +3,8 @@
 //! This module defines the CLI structure using clap's derive API.
 //! It includes all command definitions and their arguments.
 
-use clap::{Args, Parser, Subcommand};
+use crate::backup::ConflictPolicy;
+use clap::{Args, Parser, Subcommand, ValueHint};
 use clap_complete::Shell;
 use std::path::PathBuf;
 
@@ -78,6 +79,12 @@ pub enum Command {
     #[command(about = "Tag entries, find entries by tag, or manage tags")]
     Tag(TagArgs),
 
+    #[command(about = "Export, restore, or merge portable vault backups")]
+    Vault {
+        #[command(subcommand)]
+        command: VaultCommand,
+    },
+
     #[command(about = "Show KeyRex statistics and information")]
     Info,
 
@@ -101,6 +108,52 @@ pub enum Command {
 
     #[command(about = "Disable encryption on the KeyRex vault")]
     Decrypt,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum VaultCommand {
+    #[command(about = "Export a logical backup (encrypted by default)")]
+    Export {
+        #[arg(value_name = "PATH", value_hint = ValueHint::FilePath,
+            help = "Output file; defaults to keyrex-vault-<UTC timestamp>.json in the current directory")]
+        path: Option<PathBuf>,
+        #[arg(
+            long,
+            alias = "plain",
+            help = "Export readable JSON containing plaintext secrets"
+        )]
+        plaintext: bool,
+    },
+    #[command(about = "Restore a backup, or merge it into the configured vault")]
+    Import {
+        #[arg(value_name = "PATH", value_hint = ValueHint::FilePath, help = "Backup file to import")]
+        path: PathBuf,
+        #[arg(
+            long,
+            conflicts_with = "merge",
+            help = "Replace an existing vault after saving a recovery copy"
+        )]
+        replace: bool,
+        #[arg(
+            long,
+            help = "Combine entries while keeping the local vault password and metadata"
+        )]
+        merge: bool,
+        #[arg(
+            long,
+            value_enum,
+            default_value = "error",
+            requires = "merge",
+            help = "How to handle duplicate keys during a merge; overwrite replaces values and tags"
+        )]
+        on_conflict: ConflictPolicy,
+        #[arg(
+            short,
+            long,
+            help = "Skip confirmation before storing currently encrypted secrets unencrypted"
+        )]
+        yes: bool,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -211,6 +264,87 @@ mod tests {
         let mut cli_args = vec!["keyrex"];
         cli_args.extend(args);
         Cli::try_parse_from(cli_args)
+    }
+
+    #[test]
+    fn test_vault_transfer_arguments() {
+        let Command::Vault {
+            command: VaultCommand::Export { path, plaintext },
+        } = parse_cli(&["vault", "export"]).unwrap().command
+        else {
+            panic!("Expected export");
+        };
+        assert!(path.is_none());
+        assert!(!plaintext);
+        let Command::Vault {
+            command: VaultCommand::Export { path, plaintext },
+        } = parse_cli(&["vault", "export", "backup.json", "--plaintext"])
+            .unwrap()
+            .command
+        else {
+            panic!("Expected plaintext export");
+        };
+        assert_eq!(path, Some(PathBuf::from("backup.json")));
+        assert!(plaintext);
+        let Command::Vault {
+            command:
+                VaultCommand::Import {
+                    path,
+                    replace,
+                    merge,
+                    on_conflict,
+                    yes,
+                },
+        } = parse_cli(&["vault", "import", "backup.json"])
+            .unwrap()
+            .command
+        else {
+            panic!("Expected import");
+        };
+        assert_eq!(path, PathBuf::from("backup.json"));
+        assert!(!replace && !merge && !yes);
+        assert_eq!(on_conflict, ConflictPolicy::Error);
+        let Command::Vault {
+            command: VaultCommand::Import { yes, .. },
+        } = parse_cli(&["vault", "import", "backup.json", "--replace", "-y"])
+            .unwrap()
+            .command
+        else {
+            panic!("Expected import with confirmation skipped");
+        };
+        assert!(yes);
+        for policy in ["error", "skip", "overwrite"] {
+            assert!(parse_cli(&[
+                "vault",
+                "import",
+                "backup.json",
+                "--merge",
+                "--on-conflict",
+                policy
+            ])
+            .is_ok());
+        }
+        assert!(parse_cli(&["vault", "import", "backup.json", "--replace"]).is_ok());
+    }
+
+    #[test]
+    fn test_vault_transfer_invalid_arguments() {
+        for args in [
+            vec!["vault"],
+            vec!["vault", "import"],
+            vec!["vault", "import", "backup.json", "--merge", "--replace"],
+            vec!["vault", "import", "backup.json", "--on-conflict", "skip"],
+            vec![
+                "vault",
+                "import",
+                "backup.json",
+                "--merge",
+                "--on-conflict",
+                "invalid",
+            ],
+        ] {
+            assert!(parse_cli(&args).is_err(), "{args:?}");
+        }
     }
 
     #[test]

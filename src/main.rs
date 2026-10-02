@@ -1,7 +1,7 @@
 use clap::Parser;
 use colored::Colorize;
 use keyrex::cli::{Cli, Command, CompletionCommand};
-use keyrex::commands::handle_command;
+use keyrex::commands::{handle_command, handle_vault_command};
 use keyrex::completions;
 use keyrex::config;
 use keyrex::crypto::{prompt_password, reset_attempts};
@@ -66,6 +66,18 @@ fn main() {
             );
             std::process::exit(1);
         }
+    }
+
+    if let Command::Vault { command } = cli.command {
+        if let Err(error) = handle_vault_command(command) {
+            error!(%error, "Vault transfer failed");
+            eprintln!(
+                "{}",
+                format!("✗ Vault transfer failed: {}", error).red().bold()
+            );
+            std::process::exit(1);
+        }
+        return;
     }
 
     let vault_exists = match Vault::check_vault_exists() {

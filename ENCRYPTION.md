@@ -80,6 +80,76 @@ U2FsdGVkX1+xKz...AAQp8n3pJ+VbZho0I1g==
 ```
 
 This design keeps the vault portable and self-contained, requiring no external metadata.
+The one exception is the last access time: `keyrex get` records it unencrypted in
+`<vault stem>.access` beside the vault instead of re-encrypting the whole vault on
+every read. When reads rewrote the vault, its modification time revealed the same
+information.
+
+### Portable Backup Format
+
+`keyrex vault export` produces a logical backup distinct from the native
+`vault.dat` format. Both encrypted and plaintext backups are JSON documents with
+`format: "keyrex-backup"`, `version: 1`, and a `payload` object. The importer
+accepts this logical format; native vault files are not logical import documents.
+
+By default, `payload` contains:
+
+```json
+{
+  "type": "encrypted",
+  "cipher": "aes-256-gcm",
+  "kdf": "pbkdf2-hmac-sha256",
+  "iterations": 600000,
+  "data": "<base64 salt || nonce || ciphertext+tag>"
+}
+```
+
+The password protects the complete snapshot, including keys, tags, entry count,
+and timestamps. New exports use fresh salts and nonces. The document records the
+KDF rounds, independently of native vault defaults; import rejects zero rounds,
+more than 2,000,000 rounds, and unsupported algorithms before password derivation.
+Runtime exports use 600,000 rounds; Rust test binaries use reduced, explicitly
+recorded rounds to keep tests fast.
+
+`--plaintext` instead produces this editable structure:
+
+```json
+{
+  "format": "keyrex-backup",
+  "version": 1,
+  "payload": {
+    "type": "plaintext",
+    "snapshot": {
+      "exported_at": 1700000300,
+      "created_at": 1700000000,
+      "last_updated_at": 1700000100,
+      "last_accessed_at": 1700000200,
+      "entries": [
+        {"key": "example", "value": "example-value", "tags": ["work"]}
+      ]
+    }
+  }
+}
+```
+
+The encrypted payload decrypts to the same `snapshot` object. Timestamps are UTC
+Unix seconds. Entries are exported sorted by key; tags are optional and default
+to an empty set. Each key must be unique, and keys, values, and tags must meet
+normal vault validation rules. Plaintext backups are editable and have no
+cryptographic authenticity guarantee. Native plaintext integrity checks are
+regenerated when importing them.
+
+Full restoration preserves snapshot timestamps and adopts backup protection and
+password. Merging preserves the existing vault's protection and password. The CLI
+asks for confirmation when either rule would store currently encrypted secrets
+unencrypted.
+Imports capture the destination before prompting, then verify it has not changed
+under an exclusive lock before committing. Every other command that saves the
+vault makes the same check, so a command that loaded the vault before an import
+fails instead of overwriting the imported vault. Existing vault bytes are saved
+as a native recovery copy before replacement. Temporary files are created beside
+the destination, restricted before writing on Unix, and synchronized before
+publishing. Key derivation for encrypted saves runs before taking the lock.
 
 ---
 

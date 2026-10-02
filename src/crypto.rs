@@ -22,11 +22,15 @@ use std::io::Write;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use subtle::ConstantTimeEq;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 const SALT_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 const KEY_LEN: usize = 32;
+const TAG_LEN: usize = 16;
+
+/// Smallest decoded payload: salt, nonce, and the tag of an empty ciphertext.
+pub(crate) const MIN_ENCRYPTED_LEN: usize = SALT_LEN + NONCE_LEN + TAG_LEN;
 // https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html#pbkdf2
 // TODO: Document in Security
 const PBKDF2_ROUNDS: u32 = 600_000;
@@ -107,7 +111,7 @@ fn should_sleep_for_failed_attempts() -> bool {
     std::env::var_os("KEYREX_TEST_FAST_BACKOFF").is_none() && !is_running_under_cargo_test()
 }
 
-fn pbkdf2_rounds() -> u32 {
+pub(crate) fn pbkdf2_rounds() -> u32 {
     if is_running_under_cargo_test() {
         TEST_PBKDF2_ROUNDS
     } else {
@@ -149,9 +153,9 @@ pub fn get_attempts() -> u32 {
 }
 
 /// Derives a 256-bit key from a password using PBKDF2-HMAC-SHA256
-fn derive_key(password: &str, salt: &[u8]) -> [u8; KEY_LEN] {
+fn derive_key(password: &str, salt: &[u8], rounds: u32) -> [u8; KEY_LEN] {
     let mut key = [0u8; KEY_LEN];
-    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, pbkdf2_rounds(), &mut key);
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, rounds, &mut key);
     key
 }
 
@@ -210,6 +214,15 @@ pub fn validate_password_strength(password: &str) -> Result<(), CryptoError> {
 /// - Zeroizes the key immediately after encryption
 /// - Uses cryptographically secure random salt and nonce
 pub fn encrypt(plaintext: &str, password: &str) -> Result<String, CryptoError> {
+    encrypt_with_rounds(plaintext, password, pbkdf2_rounds())
+}
+
+/// Backups record their KDF parameters rather than relying on the native format's defaults.
+pub(crate) fn encrypt_with_rounds(
+    plaintext: &str,
+    password: &str,
+    rounds: u32,
+) -> Result<String, CryptoError> {
     // Obtain salt and nonce from the OS before deriving sensitive key material.
     let mut salt = [0u8; SALT_LEN];
     SysRng
@@ -221,10 +234,11 @@ pub fn encrypt(plaintext: &str, password: &str) -> Result<String, CryptoError> {
         .map_err(|_| CryptoError::EncryptionFailed)?;
 
     // Derive encryption key from password
-    let mut key = derive_key(password, &salt);
+    let mut key = Zeroizing::new(derive_key(password, &salt, rounds));
 
     // Create cipher
-    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| CryptoError::EncryptionFailed)?;
+    let cipher =
+        Aes256Gcm::new_from_slice(key.as_ref()).map_err(|_| CryptoError::EncryptionFailed)?;
 
     let nonce = Nonce::from(nonce_bytes);
 
@@ -258,13 +272,21 @@ pub fn encrypt(plaintext: &str, password: &str) -> Result<String, CryptoError> {
 /// - Zeroizes the key immediately after decryption attempt
 /// - Rate limits password attempts to prevent brute force attacks
 pub fn decrypt(encrypted: &str, password: &str) -> Result<String, CryptoError> {
+    decrypt_with_rounds(encrypted, password, pbkdf2_rounds())
+}
+
+pub(crate) fn decrypt_with_rounds(
+    encrypted: &str,
+    password: &str,
+    rounds: u32,
+) -> Result<String, CryptoError> {
     // Decode from base64
     let data = BASE64
         .decode(encrypted)
         .map_err(|_| CryptoError::InvalidFormat)?;
 
     // Check minimum length
-    if data.len() < SALT_LEN + NONCE_LEN {
+    if data.len() < MIN_ENCRYPTED_LEN {
         return Err(CryptoError::InvalidFormat);
     }
 
@@ -273,10 +295,10 @@ pub fn decrypt(encrypted: &str, password: &str) -> Result<String, CryptoError> {
     let (nonce_bytes, ciphertext) = rest.split_at(NONCE_LEN);
 
     // Derive decryption key from password
-    let mut key = derive_key(password, salt);
+    let mut key = Zeroizing::new(derive_key(password, salt, rounds));
 
     // Create cipher
-    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| {
+    let cipher = Aes256Gcm::new_from_slice(key.as_ref()).map_err(|_| {
         // Zeroize key even on cipher creation failure
         key.zeroize();
         CryptoError::DecryptionFailed

@@ -14,6 +14,7 @@ mod common;
 use common::{with_test_env, TestEnvironment};
 use keyrex::vault::{Vault, VaultError};
 use std::fs;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
@@ -333,6 +334,156 @@ fn test_concurrent_reads() {
         handle.join().unwrap();
     }
     // env is dropped here, triggering cleanup
+}
+
+#[test]
+fn test_concurrent_cli_reads_all_succeed() {
+    with_test_env("fs_concurrent_cli_reads", |env| {
+        env.set_as_vault_path().unwrap();
+        let mut vault = Vault::new();
+        vault
+            .add_entry("shared".to_string(), "shared-value".to_string())
+            .unwrap();
+        vault.save().unwrap();
+
+        // Each get re-saves its access time, so these contend for the lock and the file.
+        let children: Vec<_> = (0..20)
+            .map(|_| {
+                Command::new(env!("CARGO_BIN_EXE_keyrex"))
+                    .arg("--config")
+                    .arg(&env.config_path)
+                    .args(["get", "shared"])
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
+        for child in children {
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                "shared-value"
+            );
+        }
+    });
+}
+
+#[test]
+fn test_reads_never_invalidate_a_loaded_writer() {
+    with_test_env("fs_reads_keep_writers_valid", |env| {
+        env.set_as_vault_path().unwrap();
+        let mut vault = Vault::new();
+        vault
+            .add_entry("shared".to_string(), "shared-value".to_string())
+            .unwrap();
+        let long_ago = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        vault.last_accessed_at = long_ago;
+        vault.save().unwrap();
+        let before = fs::read(&env.vault_path).unwrap();
+
+        let mut writer = Vault::load().unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_keyrex"))
+            .arg("--config")
+            .arg(&env.config_path)
+            .args(["get", "shared"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        // The read records its access beside the vault and leaves the vault untouched.
+        assert_eq!(fs::read(&env.vault_path).unwrap(), before);
+        assert!(Vault::load().unwrap().last_accessed_at > long_ago);
+
+        writer
+            .add_entry("added".to_string(), "value".to_string())
+            .unwrap();
+        writer.save().unwrap();
+        assert!(Vault::load().unwrap().last_accessed_at > long_ago);
+    });
+}
+
+#[test]
+fn test_stale_save_does_not_overwrite_newer_vault() {
+    with_test_env("fs_stale_save", |env| {
+        env.set_as_vault_path().unwrap();
+        let missing = Vault::load().unwrap();
+        let mut vault = Vault::new();
+        vault
+            .add_entry("initial".to_string(), "value".to_string())
+            .unwrap();
+        vault.save().unwrap();
+        // Loaded before the vault existed, so it must not replace the vault created since.
+        assert!(matches!(
+            missing.save(),
+            Err(VaultError::ConcurrentModification)
+        ));
+
+        let mut first = Vault::load().unwrap();
+        let mut second = Vault::load().unwrap();
+        first
+            .add_entry("first".to_string(), "value".to_string())
+            .unwrap();
+        first.save().unwrap();
+        second
+            .add_entry("second".to_string(), "value".to_string())
+            .unwrap();
+        assert!(matches!(
+            second.save(),
+            Err(VaultError::ConcurrentModification)
+        ));
+
+        // The winner keeps saving, since each save records what it wrote.
+        first
+            .add_entry("third".to_string(), "value".to_string())
+            .unwrap();
+        first.save().unwrap();
+        let reloaded = Vault::load().unwrap();
+        assert!(reloaded.entries.contains_key("first"));
+        assert!(reloaded.entries.contains_key("third"));
+        assert!(!reloaded.entries.contains_key("second"));
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn test_symlinked_vault_is_updated_through_the_link() {
+    use std::os::unix::fs::symlink;
+
+    with_test_env("fs_symlinked_vault", |env| {
+        let real = env.test_dir.join("dotfiles/vault.dat");
+        Vault::set_vault_path(real.clone()).unwrap();
+        let mut vault = Vault::new();
+        vault
+            .add_entry("a".to_string(), "value-a".to_string())
+            .unwrap();
+        vault.save().unwrap();
+        symlink(&real, &env.vault_path).unwrap();
+
+        for args in [["get", "a"].as_slice(), &["add", "b", "value-b"]] {
+            let output = Command::new(env!("CARGO_BIN_EXE_keyrex"))
+                .arg("--config")
+                .arg(&env.config_path)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        assert!(fs::symlink_metadata(&env.vault_path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let saved = Vault::load().unwrap();
+        assert_eq!(saved.entries["b"].value, "value-b");
+    });
 }
 
 #[test]

@@ -1,11 +1,12 @@
 //! Shell completion generation and user-scoped installation.
 
 use crate::cli::Cli;
+use crate::storage;
 use clap::CommandFactory;
 use clap_complete::{generate, Shell};
 use colored::Colorize;
 use std::env;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -175,98 +176,19 @@ fn install_completion_at(
     };
 
     let script = generate_completion_script(shell);
-    replace_file(&path, &script, action == InstallAction::Updated)?;
+    storage::atomic_write(
+        &path,
+        &script,
+        action == InstallAction::Updated,
+        storage::Access::Shared,
+    )
+    .map_err(|source| io_error(&path, source))?;
 
     Ok(InstallOutcome {
         shell,
         path,
         action,
     })
-}
-
-fn replace_file(path: &Path, contents: &[u8], target_exists: bool) -> Result<(), CompletionError> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| CompletionError::UnsafeTarget(path.to_path_buf()))?;
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(BIN_NAME);
-    let mut temporary_path = None;
-
-    for attempt in 0..100_u32 {
-        let candidate = parent.join(format!(
-            ".{file_name}.{}.{}.tmp",
-            std::process::id(),
-            attempt
-        ));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
-            Ok(mut file) => {
-                if let Err(source) = file.write_all(contents).and_then(|_| file.sync_all()) {
-                    let _ = fs::remove_file(&candidate);
-                    return Err(io_error(&candidate, source));
-                }
-                temporary_path = Some(candidate);
-                break;
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(source) => return Err(io_error(&candidate, source)),
-        }
-    }
-
-    let temporary_path = temporary_path.ok_or_else(|| {
-        io_error(
-            path,
-            io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                "could not allocate a temporary completion file",
-            ),
-        )
-    })?;
-
-    let result = replace_file_platform(&temporary_path, path, target_exists);
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary_path);
-    }
-    result
-}
-
-#[cfg(not(windows))]
-fn replace_file_platform(
-    temporary_path: &Path,
-    target_path: &Path,
-    _target_exists: bool,
-) -> Result<(), CompletionError> {
-    fs::rename(temporary_path, target_path).map_err(|source| io_error(target_path, source))
-}
-
-#[cfg(windows)]
-fn replace_file_platform(
-    temporary_path: &Path,
-    target_path: &Path,
-    target_exists: bool,
-) -> Result<(), CompletionError> {
-    if !target_exists {
-        return fs::rename(temporary_path, target_path)
-            .map_err(|source| io_error(target_path, source));
-    }
-
-    let backup_path = target_path.with_extension(format!("keyrex-backup-{}", std::process::id()));
-    fs::rename(target_path, &backup_path).map_err(|source| io_error(target_path, source))?;
-    match fs::rename(temporary_path, target_path) {
-        Ok(()) => {
-            fs::remove_file(&backup_path).map_err(|source| io_error(&backup_path, source))?;
-            Ok(())
-        }
-        Err(source) => {
-            let _ = fs::rename(&backup_path, target_path);
-            Err(io_error(target_path, source))
-        }
-    }
 }
 
 fn resolve_install_path(shell: Shell) -> Result<PathBuf, CompletionError> {
@@ -577,6 +499,29 @@ mod tests {
         ] {
             let script = String::from_utf8(generate_completion_script(shell)).unwrap();
             assert!(script.contains(MANAGED_MARKER));
+        }
+    }
+
+    #[test]
+    fn test_vault_transfer_completions_include_commands_and_conflict_options() {
+        for shell in [
+            Shell::Bash,
+            Shell::Elvish,
+            Shell::Fish,
+            Shell::PowerShell,
+            Shell::Zsh,
+        ] {
+            let script = String::from_utf8(generate_completion_script(shell)).unwrap();
+            for token in [
+                "vault",
+                "export",
+                "import",
+                "plaintext",
+                "on-conflict",
+                "overwrite",
+            ] {
+                assert!(script.contains(token), "{shell}: missing {token}");
+            }
         }
     }
 

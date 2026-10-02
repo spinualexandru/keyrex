@@ -1,5 +1,6 @@
 //! Security operations for vault encryption and decryption
 
+use crate::backup;
 use crate::crypto;
 use crate::output;
 use crate::vault::Vault;
@@ -49,6 +50,7 @@ pub fn handle_encrypt(vault: &Vault, is_encrypted: bool) {
                     .yellow()
                     .bold()
             );
+            warn_plaintext_recovery_copies();
         }
         Err(e) => {
             eprintln!(
@@ -104,4 +106,24 @@ pub fn handle_decrypt(vault: &Vault, is_encrypted: bool) {
             .yellow()
             .bold()
     );
+}
+
+/// Earlier imports may have left unencrypted copies of the vault beside it.
+fn warn_plaintext_recovery_copies() {
+    let copies = Vault::get_user_vault_path()
+        .ok()
+        .and_then(|path| backup::plaintext_recovery_copies(&path).ok())
+        .unwrap_or_default();
+    if copies.is_empty() {
+        return;
+    }
+    eprintln!(
+        "{}",
+        "⚠ These import recovery copies still hold unencrypted secrets; delete them once you no longer need them:"
+            .yellow()
+            .bold()
+    );
+    for copy in copies {
+        eprintln!("  {}", copy.display());
+    }
 }

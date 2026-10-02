@@ -115,6 +115,58 @@ keyrex info       # Display vault metadata
 keyrex clear      # Remove all entries (confirmation required)
 ```
 
+### Portable Backups
+
+```bash
+keyrex vault export                          # Encrypted backup in the current directory
+keyrex vault export ./backup.json            # Choose an output file
+keyrex vault export ./backup.json --plaintext # Readable JSON for interoperability
+keyrex vault import ./backup.json            # Restore into a missing vault
+keyrex vault import ./backup.json --replace  # Replace an existing or damaged vault
+keyrex vault import ./backup.json --merge    # Combine entries; duplicate keys fail
+keyrex vault import ./backup.json --merge --on-conflict skip
+keyrex vault import ./backup.json --merge --on-conflict overwrite
+```
+
+Export prompts for a separate backup password and defaults to
+`keyrex-vault-<UTC timestamp>.json`. Exporting an encrypted vault first requires
+its current password. Existing backup files are never overwritten. `--plaintext`
+exports readable secret values; `--plain` is an alias.
+
+Import uses the vault location selected by `--config` or the default configuration.
+A full restore preserves the backup's entries, tags, and vault timestamps. An
+encrypted backup becomes an encrypted vault using the backup password; a
+plaintext backup becomes a plaintext vault. Restoring with `--replace` works even
+when the existing vault is damaged, without requiring its old password.
+
+Merging into an existing vault keeps its password, encryption setting, creation
+time, and access time. A changed merge updates the modification time. Duplicate
+keys fail before any changes unless `--on-conflict skip` keeps the local entry or
+`--on-conflict overwrite` replaces its value and complete tag set. A merge into a
+missing vault behaves like a full restore. Merges that change nothing leave the
+vault file untouched.
+
+Import asks for confirmation before it would store secrets unencrypted that are
+encrypted today: restoring a plaintext backup over an encrypted vault, or merging
+an encrypted backup into a plaintext vault. `--yes` skips the question. Declining,
+or running without a terminal to answer, exits with an error and leaves the vault
+unchanged.
+
+Before modifying an existing vault, import saves its exact contents beside it as
+`<vault filename>.pre-import-<UTC timestamp>.bak` and prints that path. These are
+native vault recovery copies, so restore one by copying it back to the configured
+vault location while KeyRex is closed. A recovery copy keeps the old vault's
+protection, so delete it once you no longer need it; `keyrex encrypt` lists any
+unencrypted copies still beside the vault. Import rejects symlinked backup files,
+invalid entries, duplicate keys or unknown fields inside a backup, and unsupported
+formats. Backup and recovery files use owner-only permissions on Unix.
+
+If the configured vault path is a symlink, KeyRex reads and updates the file it
+points to and leaves the link in place.
+
+Backups use the versioned [logical backup schema](./ENCRYPTION.md#portable-backup-format).
+Machine-specific configuration and vault paths are not included.
+
 ---
 
 ### Encryption
@@ -192,6 +244,8 @@ Vault Information
 | `tag remove <tag>` | Remove a tag, keeping entries | — |
 | `info`                 | Show vault metadata       | —                                                                   |
 | `clear`                | Clear all entries         | `--yes, -y`: Skip confirmation                                      |
+| `vault export [path]`   | Export an encrypted logical backup | `--plaintext`: Export readable JSON |
+| `vault import <path>`   | Restore or merge a backup | `--replace`, `--merge`, `--on-conflict error\|skip\|overwrite`, `--yes` |
 | `encrypt`              | Enable AES-256 encryption | —                                                                   |
 | `decrypt`              | Disable encryption        | —                                                                   |
 
@@ -204,6 +258,8 @@ src/
 ├── main.rs             # Application entry point with structured logging
 ├── cli.rs              # CLI argument definitions
 ├── vault.rs            # Data model and persistence layer
+├── backup.rs           # Logical backup format, restore, and merge
+├── storage.rs          # Secure file staging and replacement
 ├── crypto.rs           # AES-256-GCM encryption implementation
 ├── config.rs           # Multi-platform configuration management
 ├── security.rs         # Security validation utilities
@@ -216,6 +272,7 @@ src/
     ├── crud.rs         # Add, Get, Update, Remove handlers
     ├── query.rs        # List, Search, Info, Keys handlers
     ├── security.rs     # Encrypt, Decrypt handlers
+    ├── vault.rs        # Vault export/import handlers
     └── meta.rs         # Clear handler
 ```
 
@@ -230,7 +287,8 @@ For more details, see **CLAUDE.md**.
 * **Configuration:** Multi-platform config file support with environment variable expansion
 * **Encryption:** AES-256-GCM with PBKDF2-HMAC-SHA256 key derivation (600k iterations).
 * **Clipboard:** Cross-platform clipboard support via [arboard](https://crates.io/crates/arboard) (Linux X11/Wayland, macOS, Windows).
-* **Timestamps:** Tracks creation, modification, and last access (UTC).
+* **Timestamps:** Tracks creation, modification, and last access (UTC). `get` records
+  access times in `<vault stem>.access` beside the vault, so reads never rewrite it.
 * **CLI Framework:** [Clap](https://crates.io/crates/clap) for argument parsing.
 * **Color Output:** [Colored](https://crates.io/crates/colored) for consistent terminal styling.
 * **Logging:** Structured logging with [tracing](https://crates.io/crates/tracing) (configurable via `RUST_LOG`).
@@ -244,8 +302,7 @@ For more details, see **CLAUDE.md**.
 
 * Random password generation
 * Multi-vault management
-* Import/export support
-* Backup and sync capabilities
+* Automatic backups and sync capabilities
 *  Biometric authentication
 * GPG integration for hybrid encryption
 * Cloud sync support (e.g., Dropbox, Google Drive)
