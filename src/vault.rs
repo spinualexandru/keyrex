@@ -9,19 +9,24 @@
 //! - Timestamp tracking (created, updated, accessed)
 
 use crate::crypto;
-use crate::security;
+use crate::storage;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::{DateTime, Utc};
 use fslock::LockFile;
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
+use std::thread;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use tracing::debug;
+use zeroize::Zeroizing;
 
 thread_local! {
     static VAULT_PATH_OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
@@ -49,7 +54,13 @@ pub enum VaultError {
 
     #[error("Integrity check failed: vault may have been tampered with")]
     IntegrityCheckFailed,
+
+    #[error("Vault was changed by another process after it was loaded; nothing was saved, so run the command again")]
+    ConcurrentModification,
 }
+
+/// How long to wait for another keyrex process to release the vault lock.
+const LOCK_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Maximum allowed length for a key (256 characters)
 const MAX_KEY_LENGTH: usize = 256;
@@ -57,7 +68,7 @@ const MAX_KEY_LENGTH: usize = 256;
 /// Maximum allowed length for a value (64KB)
 const MAX_VALUE_LENGTH: usize = 64 * 1024;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub key: String,
     pub value: String,
@@ -139,6 +150,14 @@ impl Entry {
     }
 }
 
+/// Encrypted vaults are base64 text and plaintext vaults are JSON objects. Empty files
+/// count as plaintext, so they fail to parse instead of prompting for a password.
+pub(crate) fn is_encrypted_data(data: &[u8]) -> bool {
+    data.iter()
+        .find(|byte| !byte.is_ascii_whitespace())
+        .is_some_and(|&byte| byte != b'{')
+}
+
 fn validate_tag(tag: &str) -> Result<(), VaultError> {
     if tag.trim().is_empty() || tag.len() > MAX_KEY_LENGTH || tag.chars().any(char::is_control) {
         return Err(VaultError::InvalidInput(
@@ -148,7 +167,7 @@ fn validate_tag(tag: &str) -> Result<(), VaultError> {
     Ok(())
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Vault {
     pub entries: HashMap<String, Entry>,
     #[serde(with = "chrono::serde::ts_seconds")]
@@ -161,6 +180,105 @@ pub struct Vault {
     /// Used to detect tampering or accidental corruption
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hmac: Option<String>,
+    /// The file this vault was read from, updated by each save.
+    #[serde(skip)]
+    origin: OriginCell,
+}
+
+/// What the vault file held when this vault was read, so saves never overwrite newer data.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Origin {
+    /// Built in memory; saving writes unconditionally.
+    #[default]
+    Memory,
+    /// Read when no vault file existed.
+    Missing,
+    /// Read from a file with this SHA-256 digest.
+    File([u8; 32]),
+}
+
+impl Origin {
+    fn of(data: Option<&[u8]>) -> Self {
+        data.map_or(Self::Missing, |data| {
+            Self::File(Sha256::digest(data).into())
+        })
+    }
+}
+
+/// Vault file contents, or `None` when no vault file exists.
+type VaultBytes = Option<Zeroizing<Vec<u8>>>;
+
+/// Lets `save(&self)` record its write while `Vault` stays `Send + Sync`.
+#[derive(Debug, Default)]
+struct OriginCell(Mutex<Origin>);
+
+impl OriginCell {
+    fn get(&self) -> Origin {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn set(&self, origin: Origin) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = origin;
+    }
+}
+
+impl Clone for OriginCell {
+    fn clone(&self) -> Self {
+        Self(Mutex::new(self.get()))
+    }
+}
+
+/// Borrowed form of a saved vault, so encoding does not copy every secret. Fields and
+/// entries are in sorted order, matching the sorted `serde_json::Value` layout earlier
+/// versions wrote, so a vault kept under version control gets stable diffs.
+#[derive(Serialize)]
+struct StoredVault<'a> {
+    #[serde(with = "chrono::serde::ts_seconds")]
+    created_at: DateTime<Utc>,
+    entries: BTreeMap<&'a str, StoredEntry<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hmac: Option<String>,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    last_accessed_at: DateTime<Utc>,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    last_updated_at: DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+struct StoredEntry<'a> {
+    key: &'a str,
+    #[serde(skip_serializing_if = "no_tags")]
+    tags: &'a BTreeSet<String>,
+    value: &'a str,
+}
+
+fn no_tags(tags: &&BTreeSet<String>) -> bool {
+    tags.is_empty()
+}
+
+/// `<vault stem>.<extension>` beside the vault, or `<vault name>.<extension>` when the
+/// vault itself already has that extension.
+fn sibling_path(vault_path: &Path, extension: &str) -> PathBuf {
+    let path = vault_path.with_extension(extension);
+    if path != vault_path {
+        return path;
+    }
+    let mut name = vault_path.as_os_str().to_os_string();
+    name.push(".");
+    name.push(extension);
+    PathBuf::from(name)
+}
+
+/// `get` records access times in this file instead of rewriting the vault, so reading
+/// never makes a concurrent writer's save fail. It holds Unix seconds.
+pub(crate) fn access_path(vault_path: &Path) -> PathBuf {
+    sibling_path(vault_path, "access")
+}
+
+/// Read while holding the vault lock. A missing or unreadable record adds nothing.
+pub(crate) fn read_access_time(vault_path: &Path) -> Option<DateTime<Utc>> {
+    let data = storage::read_regular(&access_path(vault_path)).ok()?;
+    DateTime::from_timestamp(data.trim().parse().ok()?, 0)
 }
 
 impl Vault {
@@ -171,6 +289,7 @@ impl Vault {
             last_updated_at: Utc::now(),
             last_accessed_at: Utc::now(),
             hmac: None,
+            origin: OriginCell::default(),
         }
     }
 
@@ -271,36 +390,50 @@ impl Vault {
         });
     }
 
-    /// Gets the path to the lock file
-    /// The lock file is placed in the same directory as the vault file
-    fn get_lock_path() -> Result<PathBuf, VaultError> {
-        let vault_path = Self::get_user_vault_path()?;
-        let lock_path = vault_path.with_extension("lock");
-
-        // Ensure parent directory exists
-        if let Some(parent) = lock_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        Ok(lock_path)
+    /// Acquires an exclusive lock, waiting while another keyrex process holds it.
+    pub fn acquire_lock() -> Result<LockFile, VaultError> {
+        Self::acquire_lock_at(&Self::get_user_vault_path()?)
     }
 
-    /// Acquires an exclusive lock on the vault file
-    /// Returns a LockFile that should be held for the duration of the operation
-    pub fn acquire_lock() -> Result<LockFile, VaultError> {
-        let lock_path = Self::get_lock_path()?;
+    /// Like `acquire_lock`, but gives up after `timeout` instead of the default wait.
+    pub fn acquire_lock_with_timeout(timeout: Duration) -> Result<LockFile, VaultError> {
+        Self::lock_at(&Self::get_user_vault_path()?, timeout)
+    }
+
+    pub(crate) fn acquire_lock_at(vault_path: &Path) -> Result<LockFile, VaultError> {
+        Self::lock_at(vault_path, LOCK_TIMEOUT)
+    }
+
+    /// A lock still busy at the deadline is an error, never an unlocked success.
+    fn lock_at(vault_path: &Path, timeout: Duration) -> Result<LockFile, VaultError> {
+        let lock_path = sibling_path(vault_path, "lock");
+        if let Some(parent) = lock_path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent)?;
+        }
         let mut lockfile = LockFile::open(&lock_path).map_err(|e| {
             VaultError::LockAcquisitionFailed(format!("Failed to open lock file: {}", e))
         })?;
-
-        // Try to acquire lock with timeout
-        lockfile.try_lock().map_err(|e| {
-            VaultError::LockAcquisitionFailed(format!(
-                "Vault is currently locked by another process: {}",
-                e
-            ))
-        })?;
-
+        // A timeout too large to represent as a deadline waits indefinitely.
+        let deadline = Instant::now().checked_add(timeout);
+        let mut delay = Duration::from_millis(1);
+        while !lockfile
+            .try_lock()
+            .map_err(|e| VaultError::LockAcquisitionFailed(e.to_string()))?
+        {
+            let remaining =
+                deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+            if remaining.is_some_and(|remaining| remaining.is_zero()) {
+                return Err(VaultError::LockAcquisitionFailed(format!(
+                    "Vault is still locked by another process after {:?}",
+                    timeout
+                )));
+            }
+            thread::sleep(remaining.map_or(delay, |remaining| delay.min(remaining)));
+            delay = (delay * 2).min(Duration::from_millis(50));
+        }
         Ok(lockfile)
     }
 
@@ -310,88 +443,153 @@ impl Vault {
     }
 
     pub fn load() -> Result<Self, VaultError> {
-        let _lock = Self::acquire_lock()?;
-        let path = Self::get_user_vault_path()?;
-        if path.exists() {
-            let data = fs::read_to_string(&path)?;
-            let vault: Vault = serde_json::from_str(&data)?;
-            // Verify HMAC if present (integrity check for plaintext vaults)
-            vault.verify_hmac()?;
-            Ok(vault)
-        } else {
-            Ok(Vault::new())
-        }
-        // Lock is automatically released when _lock goes out of scope
-    }
-
-    pub fn save(&self) -> Result<(), VaultError> {
-        let _lock = Self::acquire_lock()?;
-        let path = Self::get_user_vault_path()?;
-
-        // Create a modified copy with HMAC for saving
-        let mut vault_to_save = serde_json::to_value(self)?;
-        let hmac = self.compute_hmac();
-        vault_to_save["hmac"] = serde_json::Value::String(hmac);
-
-        let data = serde_json::to_string(&vault_to_save)?;
-
-        // Atomic write: write to temp file, then rename
-        // This prevents corruption if the process crashes mid-write
-        let temp_path = path.with_extension("dat.tmp");
-        debug!(temp_path = %temp_path.display(), "Writing to temporary file");
-        fs::write(&temp_path, &data)?;
-        debug!(from = %temp_path.display(), to = %path.display(), "Atomic rename");
-        fs::rename(&temp_path, &path)?;
-        debug!(path = %path.display(), "Vault saved successfully (atomic)");
-
-        // Set file permissions to 0600 (owner read/write only)
-        security::set_file_permissions_secure(&path)?;
-
-        Ok(())
-        // Lock is automatically released when _lock goes out of scope
-    }
-
-    pub fn save_encrypted(&self, password: &str) -> Result<(), VaultError> {
-        let _lock = Self::acquire_lock()?;
-        let path = Self::get_user_vault_path()?;
-        let data = serde_json::to_string(self)?;
-        let encrypted = crypto::encrypt(&data, password)?;
-
-        // Atomic write: write to temp file, then rename
-        // This prevents corruption if the process crashes mid-write
-        let temp_path = path.with_extension("dat.tmp");
-        debug!(temp_path = %temp_path.display(), "Writing encrypted data to temporary file");
-        fs::write(&temp_path, &encrypted)?;
-        debug!(from = %temp_path.display(), to = %path.display(), "Atomic rename");
-        fs::rename(&temp_path, &path)?;
-        debug!(path = %path.display(), "Encrypted vault saved successfully (atomic)");
-
-        // Set file permissions to 0600 (owner read/write only)
-        security::set_file_permissions_secure(&path)?;
-
-        Ok(())
-        // Lock is automatically released when _lock goes out of scope
+        let (data, accessed) = Self::read_locked()?;
+        let mut vault = match &data {
+            Some(data) => Self::decode(data, None)?,
+            None => Vault::new(),
+        };
+        vault.merge_access_time(accessed);
+        vault
+            .origin
+            .set(Origin::of(data.as_deref().map(Vec::as_slice)));
+        Ok(vault)
     }
 
     pub fn load_encrypted(password: &str) -> Result<Self, VaultError> {
-        let _lock = Self::acquire_lock()?;
-        let path = Self::get_user_vault_path()?;
-        let encrypted_data = fs::read_to_string(&path)?;
-        let decrypted = crypto::decrypt(&encrypted_data, password)?;
-        let vault: Vault = serde_json::from_str(&decrypted)?;
+        let (data, accessed) = Self::read_locked()?;
+        let data = data
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "vault file does not exist"))?;
+        let mut vault = Self::decode(&data, Some(password))?;
+        vault.merge_access_time(accessed);
+        vault.origin.set(Origin::of(Some(&data)));
         Ok(vault)
-        // Lock is automatically released when _lock goes out of scope
+    }
+
+    /// Hold the lock only while reading; parsing and decryption happen after release.
+    fn read_locked() -> Result<(VaultBytes, Option<DateTime<Utc>>), VaultError> {
+        let path = Self::get_user_vault_path()?;
+        let _lock = Self::acquire_lock_at(&path)?;
+        let (_, data) = storage::read_through_link(&path)?;
+        Ok((data, read_access_time(&path)))
+    }
+
+    /// Adopt a newer access time recorded beside the vault.
+    pub(crate) fn merge_access_time(&mut self, recorded: Option<DateTime<Utc>>) {
+        if let Some(recorded) = recorded {
+            self.last_accessed_at = self.last_accessed_at.max(recorded);
+        }
+    }
+
+    /// Persist `last_accessed_at` beside the vault rather than rewriting the vault itself.
+    pub fn record_access(&self) -> Result<(), VaultError> {
+        let path = Self::get_user_vault_path()?;
+        let _lock = Self::acquire_lock_at(&path)?;
+        let accessed = read_access_time(&path).map_or(self.last_accessed_at, |recorded| {
+            recorded.max(self.last_accessed_at)
+        });
+        storage::write_bookkeeping(
+            &access_path(&path),
+            accessed.timestamp().to_string().as_bytes(),
+        )?;
+        Ok(())
+    }
+
+    pub fn save(&self) -> Result<(), VaultError> {
+        let data = self.encode(None)?;
+        self.write(data.as_bytes())
+    }
+
+    pub fn save_encrypted(&self, password: &str) -> Result<(), VaultError> {
+        // Key derivation is slow, so it runs before taking the lock.
+        let encrypted = self.encode(Some(password))?;
+        self.write(encrypted.as_bytes())
+    }
+
+    /// Replace the vault file unless another process changed it after this vault was read.
+    fn write(&self, data: &[u8]) -> Result<(), VaultError> {
+        let path = Self::get_user_vault_path()?;
+        let _lock = Self::acquire_lock_at(&path)?;
+        let origin = self.origin.get();
+        let target = if origin == Origin::Memory {
+            storage::resolve_link(&path)?
+        } else {
+            let (target, current) = storage::read_through_link(&path)?;
+            if Origin::of(current.as_deref().map(Vec::as_slice)) != origin {
+                return Err(VaultError::ConcurrentModification);
+            }
+            target
+        };
+        storage::atomic_write(&target, data, true, storage::Access::Private)?;
+        self.origin.set(Origin::of(Some(data)));
+        Ok(())
+    }
+
+    /// Encode without acquiring a lock so import can commit under one existing lock.
+    pub(crate) fn encode(&self, password: Option<&str>) -> Result<Zeroizing<String>, VaultError> {
+        let stored = StoredVault {
+            created_at: self.created_at,
+            entries: self
+                .entries
+                .iter()
+                .map(|(key, entry)| {
+                    let stored = StoredEntry {
+                        key: &entry.key,
+                        tags: &entry.tags,
+                        value: &entry.value,
+                    };
+                    (key.as_str(), stored)
+                })
+                .collect(),
+            hmac: password.is_none().then(|| self.compute_hmac()),
+            last_accessed_at: self.last_accessed_at,
+            last_updated_at: self.last_updated_at,
+        };
+        let data = Zeroizing::new(serde_json::to_string(&stored)?);
+        match password {
+            Some(password) => Ok(Zeroizing::new(crypto::encrypt(&data, password)?)),
+            None => Ok(data),
+        }
+    }
+
+    /// Parse vault file bytes, as every command reads them. Entries are not validated, so
+    /// a vault holding an entry that breaks today's rules still opens and can be fixed.
+    pub(crate) fn decode(data: &[u8], password: Option<&str>) -> Result<Self, VaultError> {
+        match password {
+            Some(password) => {
+                let encrypted =
+                    std::str::from_utf8(data).map_err(|_| crypto::CryptoError::InvalidFormat)?;
+                let plaintext = Zeroizing::new(crypto::decrypt(encrypted, password)?);
+                Ok(serde_json::from_str(&plaintext)?)
+            }
+            None => {
+                let vault: Self = serde_json::from_slice(data)?;
+                // Verify HMAC if present (integrity check for plaintext vaults)
+                vault.verify_hmac()?;
+                Ok(vault)
+            }
+        }
+    }
+
+    /// Names the offending entry, so it can be fixed with `update`, `tag`, or `remove`.
+    pub(crate) fn validate(&self) -> Result<(), VaultError> {
+        for (key, entry) in &self.entries {
+            let invalid =
+                |reason: String| VaultError::InvalidInput(format!("entry {key:?}: {reason}"));
+            if key != &entry.key {
+                return Err(invalid("key does not match the stored entry key".into()));
+            }
+            entry.validate().map_err(|error| match error {
+                VaultError::InvalidInput(reason) => invalid(reason),
+                other => other,
+            })?;
+        }
+        Ok(())
     }
 
     pub fn is_encrypted() -> Result<bool, VaultError> {
         let path = Self::get_user_vault_path()?;
-        if !path.exists() {
-            return Ok(false);
-        }
-
-        // Try to parse as JSON - if it fails, it's likely encrypted
-        let data = fs::read_to_string(&path)?;
-        Ok(serde_json::from_str::<Vault>(&data).is_err())
+        let (_, data) = storage::read_through_link(&path)?;
+        Ok(data.is_some_and(|data| is_encrypted_data(&data)))
     }
 
     pub fn add_entry(&mut self, key: String, value: String) -> Result<(), VaultError> {
@@ -851,6 +1049,46 @@ mod tests {
     fn test_vault_hmac_verification() {
         let vault = Vault::new();
         assert!(vault.verify_hmac().is_ok());
+    }
+
+    #[test]
+    fn test_encode_writes_the_sorted_layout_of_earlier_versions() {
+        let mut vault = Vault::new();
+        for key in ["zeta", "alpha", "middle"] {
+            vault
+                .add_entry(key.to_string(), format!("{key}-value"))
+                .unwrap();
+        }
+        vault.tag_entry("alpha", "work", false).unwrap();
+        let encoded = vault.encode(None).unwrap();
+        // Earlier versions saved through a sorted `serde_json::Value`.
+        let mut expected = serde_json::to_value(&vault).unwrap();
+        expected["hmac"] = serde_json::json!(vault.compute_hmac());
+        assert_eq!(*encoded, serde_json::to_string(&expected).unwrap());
+        let decoded: Vault = serde_json::from_str(&encoded).unwrap();
+        assert!(decoded.verify_hmac().is_ok());
+    }
+
+    #[test]
+    fn test_vault_can_be_shared_across_threads() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Vault>();
+    }
+
+    #[test]
+    fn test_unrepresentable_lock_timeout_waits_instead_of_panicking() {
+        let test_vault = TestVault::new();
+        Vault::set_vault_path(test_vault.path()).unwrap();
+        assert!(Vault::acquire_lock_with_timeout(Duration::MAX).is_ok());
+    }
+
+    #[test]
+    fn test_encryption_detection_treats_empty_and_json_as_plaintext() {
+        assert!(!is_encrypted_data(b""));
+        assert!(!is_encrypted_data(b" \n\t"));
+        assert!(!is_encrypted_data(b"\n{broken"));
+        let encrypted = crypto::encrypt("{}", "Test-Password-123!").unwrap();
+        assert!(is_encrypted_data(encrypted.as_bytes()));
     }
 
     #[test]

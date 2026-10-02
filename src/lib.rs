@@ -4,6 +4,7 @@
 //! It is primarily used by the keyrex binary, but can also be used as a library
 //! for testing and integration purposes.
 
+pub mod backup;
 pub mod cli;
 pub mod clipboard;
 pub mod commands;
@@ -14,6 +15,7 @@ pub mod logging;
 pub mod output;
 pub mod security;
 pub mod session;
+mod storage;
 pub mod vault;
 
 // Test utilities should only be available in test mode

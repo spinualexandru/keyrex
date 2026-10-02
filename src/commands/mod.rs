@@ -11,6 +11,9 @@ mod meta;
 mod query;
 mod security;
 mod tags;
+mod vault;
+
+pub use vault::handle_vault_command;
 
 use crate::cli::Command;
 use crate::vault::Vault;
@@ -19,7 +22,7 @@ use crate::vault::Vault;
 pub fn handle_command(command: Command, vault: &mut Vault, is_encrypted: bool) {
     match command {
         Command::Add { key, value } => crud::handle_add(vault, key, value, is_encrypted),
-        Command::Get { key, copy } => crud::handle_get(vault, key, copy, is_encrypted),
+        Command::Get { key, copy } => crud::handle_get(vault, key, copy),
         Command::Update { key, value } => crud::handle_update(vault, key, value, is_encrypted),
         Command::Remove { key, yes } => crud::handle_remove(vault, key, yes, is_encrypted),
         Command::List { values, sort } => query::handle_list(vault, values, sort),
@@ -30,6 +33,9 @@ pub fn handle_command(command: Command, vault: &mut Vault, is_encrypted: bool) {
         Command::Keys => query::handle_keys(vault),
         Command::Completions { .. } => {
             unreachable!("completion commands are handled before vault initialization")
+        }
+        Command::Vault { .. } => {
+            unreachable!("vault transfer commands are handled before vault initialization")
         }
         Command::Encrypt => security::handle_encrypt(vault, is_encrypted),
         Command::Decrypt => security::handle_decrypt(vault, is_encrypted),

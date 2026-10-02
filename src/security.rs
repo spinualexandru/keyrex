@@ -2,36 +2,12 @@
 //!
 //! This module provides security-related checks and validations including:
 //! - File permission validation (Unix)
-//! - File permission setting (Unix)
 //! - Security warnings for insecure configurations
 
 use colored::Colorize;
 use std::fs;
 use std::path::Path;
-use tracing::debug;
 use tracing::warn;
-
-/// Set file permissions to 0600 (owner read/write only) on Unix systems
-/// This is a security best practice for files containing secrets
-#[cfg(unix)]
-pub fn set_file_permissions_secure(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    if path.exists() {
-        let permissions = fs::Permissions::from_mode(0o600);
-        fs::set_permissions(path, permissions)?;
-        debug!(path = %path.display(), "Set file permissions to 0600");
-    }
-    Ok(())
-}
-
-/// Set file permissions on non-Unix systems (no-op, permissions work differently)
-#[cfg(not(unix))]
-pub fn set_file_permissions_secure(_path: &Path) -> std::io::Result<()> {
-    // On Windows, file permissions work differently (ACLs)
-    // This is a no-op for now, but could be implemented using Windows APIs
-    Ok(())
-}
 
 /// Check if a file has secure permissions (0600 on Unix)
 /// Displays a warning if permissions are too open
